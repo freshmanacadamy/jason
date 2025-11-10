@@ -1,17 +1,21 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
-const app = express();
+const ytdl = require('ytdl-core');
+const ffmpeg = require('fluent-ffmpeg');
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
 
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Express server for 24/7
+// Express for 24/7 uptime
 app.get('/', (req, res) => {
-  res.send('🤖 Registration Bot with Photo Upload is Running!');
+  res.send('🎥 YouTube Downloader Bot is Running!');
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+  res.json({ status: 'healthy', service: 'YouTube Downloader' });
 });
 
 app.listen(PORT, () => {
@@ -22,58 +26,152 @@ app.listen(PORT, () => {
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-// Database setup
-const db = new sqlite3.Database('users.db');
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,
-    username TEXT,
-    full_name TEXT,
-    email TEXT,
-    phone TEXT,
-    photo_id TEXT,
-    status TEXT DEFAULT 'pending',
-    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+// Store user download requests
+const userRequests = {};
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS admins (
-    chat_id INTEGER PRIMARY KEY,
-    username TEXT
-  )
-`);
-
-// Admin chat ID - replace with your actual Telegram chat ID
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '7362758034'; // Your personal Telegram chat ID
-
-// Store user registration state
-const userStates = {};
-
-// Start command with registration buttons
+// Start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from.username || 'No username';
-  
-  const welcomeMessage = `👋 Welcome ${msg.from.first_name}!\n\nI can help you with registration. Please choose an option:`;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '📝 Start Registration', callback_data: 'start_registration' },
-          { text: 'ℹ️ About Us', callback_data: 'about' }
-        ],
-        [
-          { text: '📞 Contact Admin', callback_data: 'contact_admin' }
-        ]
-      ]
-    }
-  };
-  
-  bot.sendMessage(chatId, welcomeMessage, options);
+  const welcomeMessage = `
+🎥 **YouTube Video Downloader**
+
+Send me a YouTube URL and I'll download it for you!
+
+**Supported formats:**
+📹 Video (MP4)
+🎵 Audio (MP3)
+
+**Commands:**
+/start - Show this message
+/help - Get help
+/formats - Show available formats
+
+**Just send a YouTube link!** 🎯
+  `;
+
+  bot.sendMessage(chatId, welcomeMessage, {
+    parse_mode: 'Markdown'
+  });
 });
+
+// Help command
+bot.onText(/\/help/, (msg) => {
+  const chatId = msg.chat.id;
+  const helpMessage = `
+**How to use:**
+1. Copy YouTube video URL
+2. Send it to this bot
+3. Choose format (Video/Audio)
+4. Download your file!
+
+**Example URLs:**
+https://www.youtube.com/watch?v=VIDEO_ID
+https://youtu.be/VIDEO_ID
+https://www.youtube.com/shorts/VIDEO_ID
+
+**Limits:**
+• Max video length: 30 minutes
+• File size limit: 50MB (Telegram limit)
+  `;
+
+  bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
+});
+
+// Handle YouTube URLs
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  // Skip if it's a command
+  if (text?.startsWith('/')) return;
+
+  // Check if message contains YouTube URL
+  const youtubeUrl = extractYouTubeUrl(text);
+  
+  if (youtubeUrl) {
+    try {
+      await handleYouTubeUrl(chatId, youtubeUrl, msg.message_id);
+    } catch (error) {
+      console.error('URL handling error:', error);
+      bot.sendMessage(chatId, '❌ Error processing YouTube URL. Please try again.');
+    }
+  }
+});
+
+// Extract YouTube URL from message
+function extractYouTubeUrl(text) {
+  const youtubeRegex = /(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
+  const match = text.match(youtubeRegex);
+  return match ? match[0] : null;
+}
+
+// Handle YouTube URL
+async function handleYouTubeUrl(chatId, url, messageId) {
+  try {
+    // Validate YouTube URL
+    if (!ytdl.validateURL(url)) {
+      return bot.sendMessage(chatId, '❌ Invalid YouTube URL. Please send a valid YouTube link.');
+    }
+
+    // Get video info
+    const info = await ytdl.getInfo(url);
+    const videoDetails = info.videoDetails;
+    
+    // Check video duration (30 minutes limit)
+    const duration = parseInt(videoDetails.lengthSeconds);
+    if (duration > 1800) { // 30 minutes
+      return bot.sendMessage(chatId, '❌ Video is too long (max 30 minutes).');
+    }
+
+    // Show format selection buttons
+    const title = videoDetails.title;
+    const thumbnail = videoDetails.thumbnails[0].url;
+
+    const options = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📹 Download Video (MP4)', callback_data: `video_${url}` },
+            { text: '🎵 Download Audio (MP3)', callback_data: `audio_${url}` }
+          ],
+          [
+            { text: '📊 Video Info', callback_data: `info_${url}` }
+          ]
+        ]
+      }
+    };
+
+    // Send video info with buttons
+    const message = `
+🎬 **${title}**
+
+📊 **Info:**
+⏱️ Duration: ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}
+👀 Views: ${parseInt(videoDetails.viewCount).toLocaleString()}
+📅 Published: ${new Date(videoDetails.publishDate).toLocaleDateString()}
+
+Choose download format:
+    `;
+
+    // Send thumbnail if available
+    if (thumbnail) {
+      await bot.sendPhoto(chatId, thumbnail, {
+        caption: message,
+        parse_mode: 'Markdown',
+        reply_markup: options.reply_markup
+      });
+    } else {
+      await bot.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: options.reply_markup
+      });
+    }
+
+  } catch (error) {
+    console.error('Video info error:', error);
+    bot.sendMessage(chatId, '❌ Error getting video information. Please try another video.');
+  }
+}
 
 // Handle button callbacks
 bot.on('callback_query', async (callbackQuery) => {
@@ -82,264 +180,122 @@ bot.on('callback_query', async (callbackQuery) => {
   const data = callbackQuery.data;
 
   try {
-    if (data === 'start_registration') {
-      await startRegistration(chatId, callbackQuery.from);
-    } else if (data === 'about') {
-      await bot.sendMessage(chatId, '🤖 We provide amazing services! Contact us for more information.');
-    } else if (data === 'contact_admin') {
-      await bot.sendMessage(chatId, '📞 Please contact our admin directly or use the registration form.');
-    } else if (data === 'submit_registration') {
-      await submitRegistration(chatId);
-    } else if (data === 'cancel_registration') {
-      await cancelRegistration(chatId);
+    if (data.startsWith('video_')) {
+      const url = data.replace('video_', '');
+      await downloadVideo(chatId, url, 'video');
+    } else if (data.startsWith('audio_')) {
+      const url = data.replace('audio_', '');
+      await downloadVideo(chatId, url, 'audio');
+    } else if (data.startsWith('info_')) {
+      const url = data.replace('info_', '');
+      await showVideoInfo(chatId, url);
     }
     
-    // Answer callback query to remove loading state
     bot.answerCallbackQuery(callbackQuery.id);
   } catch (error) {
     console.error('Callback error:', error);
-    bot.answerCallbackQuery(callbackQuery.id, { text: 'Error occurred!' });
+    bot.answerCallbackQuery(callbackQuery.id, { text: 'Download error!' });
   }
 });
 
-// Start registration process
-async function startRegistration(chatId, user) {
-  userStates[chatId] = {
-    step: 'waiting_full_name',
-    data: {
-      username: user.username,
-      full_name: '',
-      email: '',
-      phone: '',
-      photo_id: ''
-    }
-  };
-  
-  const registrationMessage = `📝 Registration Started!\n\nPlease follow these steps:\n\n1. Send your full name\n2. Send your email\n3. Send your phone number\n4. Upload a profile photo\n\nYou can cancel anytime using /cancel`;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '❌ Cancel Registration', callback_data: 'cancel_registration' }]
-      ]
-    }
-  };
-  
-  await bot.sendMessage(chatId, registrationMessage, options);
-  await bot.sendMessage(chatId, 'Step 1: Please send your full name:');
-}
-
-// Handle messages during registration
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  
-  // Skip if it's a command or user not in registration
-  if (!userStates[chatId] || msg.text?.startsWith('/')) return;
-  
-  const state = userStates[chatId];
-  
+// Download video function
+async function downloadVideo(chatId, url, format) {
   try {
-    if (state.step === 'waiting_full_name') {
-      state.data.full_name = text;
-      state.step = 'waiting_email';
-      await bot.sendMessage(chatId, 'Step 2: Please send your email:');
+    // Send "processing" message
+    const processingMsg = await bot.sendMessage(chatId, '⏳ Processing your download...');
+
+    const info = await ytdl.getInfo(url);
+    const title = info.videoDetails.title;
+    const safeTitle = title.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 50);
+    
+    const filename = `${safeTitle}.${format === 'video' ? 'mp4' : 'mp3'}`;
+    const filepath = `/tmp/${filename}`;
+
+    if (format === 'video') {
+      // Download video
+      const video = ytdl(url, { quality: 'highest' });
       
-    } else if (state.step === 'waiting_email') {
-      // Simple email validation
-      if (!text.includes('@')) {
-        await bot.sendMessage(chatId, '❌ Please enter a valid email address:');
-        return;
-      }
-      state.data.email = text;
-      state.step = 'waiting_phone';
-      await bot.sendMessage(chatId, 'Step 3: Please send your phone number:');
-      
-    } else if (state.step === 'waiting_phone') {
-      state.data.phone = text;
-      state.step = 'waiting_photo';
-      await bot.sendMessage(chatId, 'Step 4: Please upload your profile photo:');
-    }
-  } catch (error) {
-    console.error('Message handling error:', error);
-    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
-  }
-});
-
-// Handle photo uploads
-bot.on('photo', async (msg) => {
-  const chatId = msg.chat.id;
-  
-  if (!userStates[chatId] || userStates[chatId].step !== 'waiting_photo') return;
-  
-  try {
-    // Get the largest photo version
-    const photo = msg.photo[msg.photo.length - 1];
-    const fileId = photo.file_id;
-    
-    userStates[chatId].data.photo_id = fileId;
-    userStates[chatId].step = 'completed';
-    
-    // Show registration summary
-    const userData = userStates[chatId].data;
-    const summary = `
-✅ Registration Complete!
-
-📋 Your Details:
-👤 Name: ${userData.full_name}
-📧 Email: ${userData.email}
-📞 Phone: ${userData.phone}
-🖼️ Photo: Uploaded
-
-Please review and submit your registration.
-    `;
-    
-    const options = {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '✅ Submit Registration', callback_data: 'submit_registration' },
-            { text: '❌ Cancel', callback_data: 'cancel_registration' }
-          ]
-        ]
-      }
-    };
-    
-    // Send the uploaded photo back to user
-    await bot.sendPhoto(chatId, fileId, { caption: '📸 Your uploaded photo' });
-    await bot.sendMessage(chatId, summary, options);
-    
-  } catch (error) {
-    console.error('Photo handling error:', error);
-    await bot.sendMessage(chatId, '❌ Error processing photo. Please try again.');
-  }
-});
-
-// Submit registration to admin
-async function submitRegistration(chatId) {
-  try {
-    const userData = userStates[chatId].data;
-    
-    // Save to database
-    db.run(
-      `INSERT INTO users (chat_id, username, full_name, email, phone, photo_id, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [chatId, userData.username, userData.full_name, userData.email, userData.phone, userData.photo_id, 'pending'],
-      function(err) {
-        if (err) {
-          console.error('Database error:', err);
-          bot.sendMessage(chatId, '❌ Database error. Please try again.');
-          return;
-        }
-        
-        // Send notification to admin
-        const adminMessage = `
-🆕 NEW REGISTRATION!
-
-👤 User: ${userData.full_name}
-📧 Email: ${userData.email}
-📞 Phone: ${userData.phone}
-🤖 Username: @${userData.username}
-🆔 User ID: ${chatId}
-📅 Registered: ${new Date().toLocaleString()}
-        `;
-        
-        // Send text info to admin
-        bot.sendMessage(ADMIN_CHAT_ID, adminMessage);
-        
-        // Send photo to admin if available
-        if (userData.photo_id) {
-          bot.sendPhoto(ADMIN_CHAT_ID, userData.photo_id, { 
-            caption: `📸 Profile photo from ${userData.full_name}` 
+      video.pipe(fs.createWriteStream(filepath))
+        .on('finish', async () => {
+          await bot.sendVideo(chatId, filepath, {
+            caption: `📹 ${title}`
           });
-        }
-        
-        // Admin actions keyboard
-        const adminOptions = {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Approve User', callback_data: `approve_${chatId}` },
-                { text: '❌ Reject User', callback_data: `reject_${chatId}` }
-              ],
-              [
-                { text: '📞 Contact User', callback_data: `contact_${chatId}` }
-              ]
-            ]
-          }
-        };
-        
-        bot.sendMessage(ADMIN_CHAT_ID, 'Choose action:', adminOptions);
-        
-        // Confirm to user
-        bot.sendMessage(chatId, '✅ Your registration has been submitted! Admin will review it soon.');
-        
-        // Clear user state
-        delete userStates[chatId];
-      }
-    );
-  } catch (error) {
-    console.error('Submission error:', error);
-    bot.sendMessage(chatId, '❌ Error submitting registration. Please try again.');
-  }
-}
+          await bot.deleteMessage(chatId, processingMsg.message_id);
+          
+          // Clean up file
+          fs.unlinkSync(filepath);
+        })
+        .on('error', async (error) => {
+          console.error('Video download error:', error);
+          await bot.editMessageText('❌ Error downloading video.', {
+            chat_id: chatId,
+            message_id: processingMsg.message_id
+          });
+        });
 
-// Cancel registration
-async function cancelRegistration(chatId) {
-  delete userStates[chatId];
-  await bot.sendMessage(chatId, '❌ Registration cancelled. Use /start to begin again.');
-}
-
-// Admin commands
-bot.onText(/\/admin/, (msg) => {
-  const chatId = msg.chat.id;
-  
-  // Check if user is admin
-  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
-    bot.sendMessage(chatId, '❌ Access denied. Admin only.');
-    return;
-  }
-  
-  const adminMessage = `👑 Admin Panel\n\nChoose an action:`;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📊 View Statistics', callback_data: 'admin_stats' }],
-        [{ text: '👥 Pending Registrations', callback_data: 'admin_pending' }],
-        [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }]
-      ]
+    } else if (format === 'audio') {
+      // Download audio
+      const audio = ytdl(url, { quality: 'highestaudio' });
+      
+      ffmpeg(audio)
+        .audioBitrate(128)
+        .save(filepath)
+        .on('end', async () => {
+          await bot.sendAudio(chatId, filepath, {
+            title: title,
+            performer: 'YouTube'
+          });
+          await bot.deleteMessage(chatId, processingMsg.message_id);
+          
+          // Clean up file
+          fs.unlinkSync(filepath);
+        })
+        .on('error', async (error) => {
+          console.error('Audio download error:', error);
+          await bot.editMessageText('❌ Error downloading audio.', {
+            chat_id: chatId,
+            message_id: processingMsg.message_id
+          });
+        });
     }
-  };
-  
-  bot.sendMessage(chatId, adminMessage, options);
+
+  } catch (error) {
+    console.error('Download error:', error);
+    bot.sendMessage(chatId, '❌ Download failed. Please try again.');
+  }
+}
+
+// Show video info
+async function showVideoInfo(chatId, url) {
+  try {
+    const info = await ytdl.getInfo(url);
+    const videoDetails = info.videoDetails;
+    
+    const message = `
+📊 **Video Information**
+
+🎬 **Title:** ${videoDetails.title}
+👤 **Author:** ${videoDetails.author.name}
+⏱️ **Duration:** ${Math.floor(videoDetails.lengthSeconds / 60)}:${(videoDetails.lengthSeconds % 60).toString().padStart(2, '0')}
+👀 **Views:** ${parseInt(videoDetails.viewCount).toLocaleString()}
+📅 **Published:** ${new Date(videoDetails.publishDate).toLocaleDateString()}
+📝 **Description:** ${videoDetails.description.substring(0, 200)}...
+    `;
+
+    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+  } catch (error) {
+    console.error('Info error:', error);
+    bot.sendMessage(chatId, '❌ Error getting video information.');
+  }
+}
+
+// Error handling
+bot.on('polling_error', (error) => {
+  console.log(`❌ Polling error: ${error}`);
 });
 
-// Handle admin callbacks
-bot.on('callback_query', async (callbackQuery) => {
-  const message = callbackQuery.message;
-  const chatId = message.chat.id;
-  const data = callbackQuery.data;
-  
-  // Check if admin
-  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
-    bot.answerCallbackQuery(callbackQuery.id, { text: 'Admin only!' });
-    return;
-  }
-  
-  if (data.startsWith('approve_')) {
-    const userChatId = data.replace('approve_', '');
-    // Approve user logic here
-    bot.sendMessage(chatId, `✅ User ${userChatId} approved!`);
-    bot.sendMessage(userChatId, '🎉 Your registration has been approved!');
-  } else if (data.startsWith('reject_')) {
-    const userChatId = data.replace('reject_', '');
-    // Reject user logic here
-    bot.sendMessage(chatId, `❌ User ${userChatId} rejected!`);
-    bot.sendMessage(userChatId, '❌ Your registration has been rejected. Contact admin for details.');
-  }
-  
-  bot.answerCallbackQuery(callbackQuery.id);
+bot.on('error', (error) => {
+  console.log(`❌ Bot error: ${error}`);
 });
 
-console.log('✅ Telegram Registration Bot Started!');
+console.log('✅ YouTube Downloader Bot Started!');
