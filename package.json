@@ -1,7 +1,7 @@
 {
-  "name": "telegram-registration-bot",
+  "name": "youtube-downloader-bot",
   "version": "1.0.0",
-  "description": "Telegram bot with registration and photo upload",
+  "description": "YouTube Video Downloader Telegram Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,6 +9,9 @@
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "express": "^4.18.2",
-    "sqlite3": "^5.1.6"
+    "ytdl-core": "^4.11.5",
+    "fluent-ffmpeg": "^2.1.2",
+    "axios": "^1.6.0",
+    "fs": "0.0.1-security"
   }
 }
