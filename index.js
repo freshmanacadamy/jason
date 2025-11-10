@@ -1,9 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
-const ytdl = require('ytdl-core');
-const ffmpeg = require('fluent-ffmpeg');
-const fs = require('fs');
-const path = require('path');
+const OpenAI = require('openai');
 const axios = require('axios');
 
 const app = express();
@@ -11,11 +8,11 @@ const PORT = process.env.PORT || 3000;
 
 // Express for 24/7 uptime
 app.get('/', (req, res) => {
-  res.send('🎥 YouTube Downloader Bot is Running!');
+  res.send('🤖 ChatGPT Telegram Bot is Running!');
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'YouTube Downloader' });
+  res.json({ status: 'healthy', service: 'ChatGPT Bot' });
 });
 
 app.listen(PORT, () => {
@@ -26,31 +23,47 @@ app.listen(PORT, () => {
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-// Store user download requests
-const userRequests = {};
+// OpenAI ChatGPT
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+// Store conversation history
+const userConversations = new Map();
 
 // Start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const welcomeMessage = `
-🎥 **YouTube Video Downloader**
+🤖 **ChatGPT AI Assistant**
 
-Send me a YouTube URL and I'll download it for you!
-
-**Supported formats:**
-📹 Video (MP4)
-🎵 Audio (MP3)
+I'm powered by OpenAI's GPT-4 and ready to help you!
 
 **Commands:**
-/start - Show this message
+/start - Start conversation
 /help - Get help
-/formats - Show available formats
+/new - Start new conversation
+/mode - Change AI mode
+/stats - Show usage statistics
 
-**Just send a YouTube link!** 🎯
+**Just send me a message and I'll respond!** 💬
+
+*Note: I remember our conversation context*
   `;
 
   bot.sendMessage(chatId, welcomeMessage, {
-    parse_mode: 'Markdown'
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '💬 Start Chat', callback_data: 'start_chat' },
+          { text: '🛠️ Help', callback_data: 'show_help' }
+        ],
+        [
+          { text: '🧠 AI Modes', callback_data: 'show_modes' }
+        ]
+      ]
+    }
   });
 });
 
@@ -58,120 +71,72 @@ Send me a YouTube URL and I'll download it for you!
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const helpMessage = `
-**How to use:**
-1. Copy YouTube video URL
-2. Send it to this bot
-3. Choose format (Video/Audio)
-4. Download your file!
+**How to use this AI bot:**
 
-**Example URLs:**
-https://www.youtube.com/watch?v=VIDEO_ID
-https://youtu.be/VIDEO_ID
-https://www.youtube.com/shorts/VIDEO_ID
+💬 **Chat Features:**
+- Normal conversation
+- Code generation
+- Translation
+- Writing assistance
+- Problem solving
 
-**Limits:**
-• Max video length: 30 minutes
-• File size limit: 50MB (Telegram limit)
+🛠️ **Commands:**
+/new - Clear conversation history
+/mode - Change AI personality
+/stats - See your usage
+
+⚡ **Tips:**
+- I remember last 10 messages
+- Use /new to reset context
+- Be specific for better answers
+
+**Just start typing your question!**
   `;
 
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
 
-// Handle YouTube URLs
-bot.on('message', async (msg) => {
+// New conversation command
+bot.onText(/\/new/, (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text;
-
-  // Skip if it's a command
-  if (text?.startsWith('/')) return;
-
-  // Check if message contains YouTube URL
-  const youtubeUrl = extractYouTubeUrl(text);
-  
-  if (youtubeUrl) {
-    try {
-      await handleYouTubeUrl(chatId, youtubeUrl, msg.message_id);
-    } catch (error) {
-      console.error('URL handling error:', error);
-      bot.sendMessage(chatId, '❌ Error processing YouTube URL. Please try again.');
-    }
-  }
+  userConversations.delete(chatId);
+  bot.sendMessage(chatId, '🔄 Conversation history cleared! Starting fresh...');
 });
 
-// Extract YouTube URL from message
-function extractYouTubeUrl(text) {
-  const youtubeRegex = /(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/;
-  const match = text.match(youtubeRegex);
-  return match ? match[0] : null;
-}
-
-// Handle YouTube URL
-async function handleYouTubeUrl(chatId, url, messageId) {
-  try {
-    // Validate YouTube URL
-    if (!ytdl.validateURL(url)) {
-      return bot.sendMessage(chatId, '❌ Invalid YouTube URL. Please send a valid YouTube link.');
-    }
-
-    // Get video info
-    const info = await ytdl.getInfo(url);
-    const videoDetails = info.videoDetails;
-    
-    // Check video duration (30 minutes limit)
-    const duration = parseInt(videoDetails.lengthSeconds);
-    if (duration > 1800) { // 30 minutes
-      return bot.sendMessage(chatId, '❌ Video is too long (max 30 minutes).');
-    }
-
-    // Show format selection buttons
-    const title = videoDetails.title;
-    const thumbnail = videoDetails.thumbnails[0].url;
-
-    const options = {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '📹 Download Video (MP4)', callback_data: `video_${url}` },
-            { text: '🎵 Download Audio (MP3)', callback_data: `audio_${url}` }
-          ],
-          [
-            { text: '📊 Video Info', callback_data: `info_${url}` }
-          ]
+// Mode selection command
+bot.onText(/\/mode/, (msg) => {
+  const chatId = msg.chat.id;
+  
+  const modeOptions = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🤖 Assistant', callback_data: 'mode_assistant' },
+          { text: '💻 Programmer', callback_data: 'mode_programmer' }
+        ],
+        [
+          { text: '🎨 Creative', callback_data: 'mode_creative' },
+          { text: '📚 Teacher', callback_data: 'mode_teacher' }
+        ],
+        [
+          { text: '😄 Friendly', callback_data: 'mode_friendly' },
+          { text: '📊 Analyst', callback_data: 'mode_analyst' }
         ]
-      }
-    };
-
-    // Send video info with buttons
-    const message = `
-🎬 **${title}**
-
-📊 **Info:**
-⏱️ Duration: ${Math.floor(duration / 60)}:${(duration % 60).toString().padStart(2, '0')}
-👀 Views: ${parseInt(videoDetails.viewCount).toLocaleString()}
-📅 Published: ${new Date(videoDetails.publishDate).toLocaleDateString()}
-
-Choose download format:
-    `;
-
-    // Send thumbnail if available
-    if (thumbnail) {
-      await bot.sendPhoto(chatId, thumbnail, {
-        caption: message,
-        parse_mode: 'Markdown',
-        reply_markup: options.reply_markup
-      });
-    } else {
-      await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        reply_markup: options.reply_markup
-      });
+      ]
     }
+  };
 
-  } catch (error) {
-    console.error('Video info error:', error);
-    bot.sendMessage(chatId, '❌ Error getting video information. Please try another video.');
-  }
-}
+  bot.sendMessage(chatId, '🎭 Choose AI Mode:', modeOptions);
+});
+
+// Stats command
+bot.onText(/\/stats/, (msg) => {
+  const chatId = msg.chat.id;
+  const conversation = userConversations.get(chatId);
+  const messageCount = conversation ? conversation.messages.length / 2 : 0;
+  
+  bot.sendMessage(chatId, `📊 **Your Stats:**\n\n💬 Messages exchanged: ${messageCount}\n🧠 Memory: ${conversation ? 'Active' : 'None'}\n⚡ Status: Online`, { parse_mode: 'Markdown' });
+});
 
 // Handle button callbacks
 bot.on('callback_query', async (callbackQuery) => {
@@ -180,114 +145,179 @@ bot.on('callback_query', async (callbackQuery) => {
   const data = callbackQuery.data;
 
   try {
-    if (data.startsWith('video_')) {
-      const url = data.replace('video_', '');
-      await downloadVideo(chatId, url, 'video');
-    } else if (data.startsWith('audio_')) {
-      const url = data.replace('audio_', '');
-      await downloadVideo(chatId, url, 'audio');
-    } else if (data.startsWith('info_')) {
-      const url = data.replace('info_', '');
-      await showVideoInfo(chatId, url);
+    if (data === 'start_chat') {
+      await bot.sendMessage(chatId, '💬 Hello! I\'m your AI assistant. How can I help you today?');
+    } else if (data === 'show_help') {
+      await bot.sendMessage(chatId, '🛠️ **Help Center**\n\nJust send me any message and I\'ll respond!\nUse /new to clear history\nUse /mode to change my style', { parse_mode: 'Markdown' });
+    } else if (data === 'show_modes') {
+      await showModeSelection(chatId);
+    } else if (data.startsWith('mode_')) {
+      await setUserMode(chatId, data.replace('mode_', ''));
     }
     
     bot.answerCallbackQuery(callbackQuery.id);
   } catch (error) {
     console.error('Callback error:', error);
-    bot.answerCallbackQuery(callbackQuery.id, { text: 'Download error!' });
+    bot.answerCallbackQuery(callbackQuery.id, { text: 'Error!' });
   }
 });
 
-// Download video function
-async function downloadVideo(chatId, url, format) {
+// AI Mode configurations
+const aiModes = {
+  assistant: {
+    name: '🤖 Assistant',
+    system: 'You are a helpful AI assistant. Provide clear, concise, and accurate responses.'
+  },
+  programmer: {
+    name: '💻 Programmer',
+    system: 'You are a senior software developer. Provide code examples, debugging help, and technical explanations.'
+  },
+  creative: {
+    name: '🎨 Creative',
+    system: 'You are a creative writer and artist. Provide imaginative, storytelling, and creative responses.'
+  },
+  teacher: {
+    name: '📚 Teacher',
+    system: 'You are an educational instructor. Explain concepts clearly with examples and encourage learning.'
+  },
+  friendly: {
+    name: '😄 Friendly',
+    system: 'You are a friendly and casual companion. Use emojis and be warm in your responses.'
+  },
+  analyst: {
+    name: '📊 Analyst',
+    system: 'You are a data analyst. Provide structured, analytical responses with clear reasoning.'
+  }
+};
+
+// Set user mode
+async function setUserMode(chatId, mode) {
+  if (!userConversations.has(chatId)) {
+    userConversations.set(chatId, { mode: 'assistant', messages: [] });
+  }
+  
+  const conversation = userConversations.get(chatId);
+  conversation.mode = mode;
+  conversation.messages = []; // Clear history when changing mode
+  
+  const modeInfo = aiModes[mode];
+  await bot.sendMessage(chatId, `🎭 Mode set to: ${modeInfo.name}\n\n${modeInfo.system}\n\nConversation history cleared. Start fresh!`);
+}
+
+// Show mode selection
+async function showModeSelection(chatId) {
+  const modeOptions = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '🤖 Assistant', callback_data: 'mode_assistant' },
+          { text: '💻 Programmer', callback_data: 'mode_programmer' }
+        ],
+        [
+          { text: '🎨 Creative', callback_data: 'mode_creative' },
+          { text: '📚 Teacher', callback_data: 'mode_teacher' }
+        ],
+        [
+          { text: '😄 Friendly', callback_data: 'mode_friendly' },
+          { text: '📊 Analyst', callback_data: 'mode_analyst' }
+        ]
+      ]
+    }
+  };
+
+  await bot.sendMessage(chatId, '🎭 **Choose AI Personality:**\n\nEach mode has different behavior and expertise:', modeOptions);
+}
+
+// Handle all messages
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+  const userId = msg.from.id;
+
+  // Ignore commands and empty messages
+  if (!text || text.startsWith('/')) return;
+
   try {
-    // Send "processing" message
-    const processingMsg = await bot.sendMessage(chatId, '⏳ Processing your download...');
+    // Send "typing" action
+    await bot.sendChatAction(chatId, 'typing');
 
-    const info = await ytdl.getInfo(url);
-    const title = info.videoDetails.title;
-    const safeTitle = title.replace(/[^a-zA-Z0-9 ]/g, '').substring(0, 50);
-    
-    const filename = `${safeTitle}.${format === 'video' ? 'mp4' : 'mp3'}`;
-    const filepath = `/tmp/${filename}`;
-
-    if (format === 'video') {
-      // Download video
-      const video = ytdl(url, { quality: 'highest' });
-      
-      video.pipe(fs.createWriteStream(filepath))
-        .on('finish', async () => {
-          await bot.sendVideo(chatId, filepath, {
-            caption: `📹 ${title}`
-          });
-          await bot.deleteMessage(chatId, processingMsg.message_id);
-          
-          // Clean up file
-          fs.unlinkSync(filepath);
-        })
-        .on('error', async (error) => {
-          console.error('Video download error:', error);
-          await bot.editMessageText('❌ Error downloading video.', {
-            chat_id: chatId,
-            message_id: processingMsg.message_id
-          });
-        });
-
-    } else if (format === 'audio') {
-      // Download audio
-      const audio = ytdl(url, { quality: 'highestaudio' });
-      
-      ffmpeg(audio)
-        .audioBitrate(128)
-        .save(filepath)
-        .on('end', async () => {
-          await bot.sendAudio(chatId, filepath, {
-            title: title,
-            performer: 'YouTube'
-          });
-          await bot.deleteMessage(chatId, processingMsg.message_id);
-          
-          // Clean up file
-          fs.unlinkSync(filepath);
-        })
-        .on('error', async (error) => {
-          console.error('Audio download error:', error);
-          await bot.editMessageText('❌ Error downloading audio.', {
-            chat_id: chatId,
-            message_id: processingMsg.message_id
-          });
-        });
+    // Get or initialize conversation
+    if (!userConversations.has(chatId)) {
+      userConversations.set(chatId, { mode: 'assistant', messages: [] });
     }
 
-  } catch (error) {
-    console.error('Download error:', error);
-    bot.sendMessage(chatId, '❌ Download failed. Please try again.');
-  }
-}
+    const conversation = userConversations.get(chatId);
+    const mode = aiModes[conversation.mode] || aiModes.assistant;
 
-// Show video info
-async function showVideoInfo(chatId, url) {
-  try {
-    const info = await ytdl.getInfo(url);
-    const videoDetails = info.videoDetails;
+    // Add user message to conversation
+    conversation.messages.push({ role: 'user', content: text });
+
+    // Keep only last 10 messages (5 exchanges) to manage token limit
+    if (conversation.messages.length > 20) {
+      conversation.messages = conversation.messages.slice(-20);
+    }
+
+    // Prepare messages for OpenAI (start with system message)
+    const messages = [
+      { role: 'system', content: mode.system },
+      ...conversation.messages
+    ];
+
+    // Call OpenAI API
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: messages,
+      max_tokens: 1000,
+      temperature: 0.7,
+    });
+
+    const aiResponse = completion.choices[0].message.content;
+
+    // Add AI response to conversation
+    conversation.messages.push({ role: 'assistant', content: aiResponse });
+
+    // Send response to user
+    await bot.sendMessage(chatId, aiResponse, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🔄 New Chat', callback_data: 'new_chat' },
+            { text: '🎭 Change Mode', callback_data: 'show_modes' }
+          ]
+        ]
+      }
+    });
+
+  } catch (error) {
+    console.error('ChatGPT API error:', error);
     
-    const message = `
-📊 **Video Information**
-
-🎬 **Title:** ${videoDetails.title}
-👤 **Author:** ${videoDetails.author.name}
-⏱️ **Duration:** ${Math.floor(videoDetails.lengthSeconds / 60)}:${(videoDetails.lengthSeconds % 60).toString().padStart(2, '0')}
-👀 **Views:** ${parseInt(videoDetails.viewCount).toLocaleString()}
-📅 **Published:** ${new Date(videoDetails.publishDate).toLocaleDateString()}
-📝 **Description:** ${videoDetails.description.substring(0, 200)}...
-    `;
-
-    bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-  } catch (error) {
-    console.error('Info error:', error);
-    bot.sendMessage(chatId, '❌ Error getting video information.');
+    let errorMessage = '❌ Sorry, I encountered an error. ';
+    
+    if (error.code === 'insufficient_quota') {
+      errorMessage += 'API quota exceeded. Please check OpenAI billing.';
+    } else if (error.code === 'rate_limit_exceeded') {
+      errorMessage += 'Rate limit exceeded. Please wait a moment.';
+    } else {
+      errorMessage += 'Please try again later.';
+    }
+    
+    await bot.sendMessage(chatId, errorMessage);
   }
-}
+});
+
+// Handle new chat from button
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const chatId = message.chat.id;
+  const data = callbackQuery.data;
+
+  if (data === 'new_chat') {
+    userConversations.delete(chatId);
+    await bot.sendMessage(chatId, '🔄 Started a new conversation! How can I help you?');
+    bot.answerCallbackQuery(callbackQuery.id, { text: 'New chat started!' });
+  }
+});
 
 // Error handling
 bot.on('polling_error', (error) => {
@@ -298,4 +328,4 @@ bot.on('error', (error) => {
   console.log(`❌ Bot error: ${error}`);
 });
 
-console.log('✅ YouTube Downloader Bot Started!');
+console.log('✅ ChatGPT Telegram Bot Started!');
