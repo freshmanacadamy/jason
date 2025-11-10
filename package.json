@@ -1,13 +1,14 @@
 {
-  "name": "telegram-bot",
+  "name": "telegram-registration-bot",
   "version": "1.0.0",
-  "description": "Telegram Bot on Render",
+  "description": "Telegram bot with registration and photo upload",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.6"
   }
 }
