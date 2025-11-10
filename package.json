@@ -1,7 +1,7 @@
 {
-  "name": "youtube-downloader-bot",
+  "name": "chatgpt-telegram-bot",
   "version": "1.0.0",
-  "description": "YouTube Video Downloader Telegram Bot",
+  "description": "Telegram Bot with ChatGPT Integration",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -9,9 +9,7 @@
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "express": "^4.18.2",
-    "ytdl-core": "^4.11.5",
-    "fluent-ffmpeg": "^2.1.2",
-    "axios": "^1.6.0",
-    "fs": "0.0.1-security"
+    "openai": "^4.20.1",
+    "axios": "^1.6.0"
   }
 }
