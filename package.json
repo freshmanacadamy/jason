@@ -1,7 +1,7 @@
 {
   "name": "telegram-registration-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for lecture class registration",
+  "description": "Telegram bot with registration and photo upload",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
