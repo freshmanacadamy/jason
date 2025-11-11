@@ -5,12 +5,12 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Configuration - UPDATE THESE!
-const BOT_TOKEN = process.env.BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE';
+// Configuration - UPDATED TO MATCH YOUR .env
+const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_USERNAME = '@jumarket';
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'YOUR_USERNAME_HERE';
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
-// In-memory storage (replace with database later)
+// In-memory storage
 let users = new Map();
 let products = new Map();
 let productIdCounter = 1;
@@ -29,6 +29,7 @@ app.listen(PORT, () => {
 });
 
 console.log('✅ Bot started successfully!');
+console.log(`🤖 Admin IDs: ${ADMIN_IDS.join(', ')}`);
 
 // User states for conversation flow
 const userStates = new Map();
@@ -65,9 +66,17 @@ bot.onText(/\/start/, async (msg) => {
       username: msg.from.username,
       firstName: msg.from.first_name,
       lastName: msg.from.last_name,
-      joinedChannel: true // Skip channel check for now
+      joinedChannel: true
     });
 
+    bot.sendMessage(chatId, 
+      `🎓 *Welcome to Jimma University Marketplace!*\n\n` +
+      `🏪 Buy and sell items within campus\n` +
+      `📱 Easy to use - just follow the menus\n` +
+      `🔒 Safe campus transactions\n\n` +
+      `Use the buttons below to get started!`
+    );
+    
     showMainMenu(chatId);
     
   } catch (error) {
@@ -115,7 +124,8 @@ bot.on('photo', async (msg) => {
       bot.sendMessage(chatId, 
         `✅ Photo received!\n\n` +
         `🏷️ *Step 2/3 - Product Title*\n\n` +
-        `Enter a title for your product:`,
+        `Enter a title for your product:\n\n` +
+        `Example: "Calculus Textbook" or "iPhone 12"`,
         { parse_mode: 'Markdown' }
       );
     } catch (error) {
@@ -155,8 +165,9 @@ bot.on('message', async (msg) => {
           if (!isNaN(text) && parseInt(text) > 0) {
             userState.productData.price = parseInt(text);
             userState.productData.sellerId = userId;
-            userState.productData.sellerUsername = msg.from.username;
-            userState.productData.status = 'approved'; // Auto-approve for now
+            userState.productData.sellerUsername = msg.from.username || 'Student';
+            userState.productData.status = 'approved';
+            userState.productData.createdAt = new Date();
             
             // Save product
             const productId = productIdCounter++;
@@ -168,13 +179,14 @@ bot.on('message', async (msg) => {
               `✅ *Product Added Successfully!*\n\n` +
               `🏷️ *Title:* ${userState.productData.title}\n` +
               `💰 *Price:* ${userState.productData.price} ETB\n\n` +
-              `Your product is now live! 🎉`,
+              `Your product is now live in the marketplace! 🎉\n\n` +
+              `Buyers can now find it in "Browse Products"`,
               { parse_mode: 'Markdown' }
             );
 
             showMainMenu(chatId);
           } else {
-            bot.sendMessage(chatId, '❌ Please enter a valid price (numbers only).');
+            bot.sendMessage(chatId, '❌ Please enter a valid price (numbers only). Example: 1500');
           }
           break;
       }
@@ -194,25 +206,18 @@ bot.onText(/\/browse|🛍️ Browse Products/, async (msg) => {
       bot.sendMessage(chatId, 
         `🛍️ *Browse Products*\n\n` +
         `No products available yet.\n\n` +
-        `Be the first to list something!`,
+        `Be the first to list something! Use "➕ Add Product"`,
         { parse_mode: 'Markdown' }
       );
       return;
     }
 
-    let message = `🛍️ *Available Products*\n\n`;
+    let approvedProducts = 0;
     
+    // Send each product as separate message with image
     products.forEach((product, id) => {
       if (product.status === 'approved') {
-        message += `🏷️ *${product.title}*\n`;
-        message += `💰 ${product.price} ETB\n`;
-        message += `👤 @${product.sellerUsername || 'Student'}\n\n`;
-      }
-    });
-
-    // Send product images with details
-    products.forEach((product, id) => {
-      if (product.status === 'approved') {
+        approvedProducts++;
         const keyboard = {
           reply_markup: {
             inline_keyboard: [
@@ -231,6 +236,14 @@ bot.onText(/\/browse|🛍️ Browse Products/, async (msg) => {
         });
       }
     });
+
+    if (approvedProducts === 0) {
+      bot.sendMessage(chatId, 
+        `🛍️ *Browse Products*\n\n` +
+        `No active products available at the moment.`,
+        { parse_mode: 'Markdown' }
+      );
+    }
     
   } catch (error) {
     console.error('Error browsing products:', error);
@@ -258,21 +271,29 @@ bot.on('callback_query', async (callbackQuery) => {
           `📦 *Product:* ${product.title}\n` +
           `💰 *Price:* ${product.price} ETB\n` +
           `👤 *Seller:* @${product.sellerUsername}\n\n` +
-          `Contact the seller directly: @${product.sellerUsername}`,
+          `I've notified the seller about your interest!\n\n` +
+          `💬 *Direct chat:* https://t.me/${product.sellerUsername}\n` +
+          `📍 *Meetup:* Arrange campus location\n` +
+          `💵 *Payment:* Cash on delivery recommended`,
           { parse_mode: 'Markdown' }
         );
 
         // Notify seller
-        await bot.sendMessage(product.sellerId,
-          `🎉 *NEW BUYER INTERESTED!*\n\n` +
-          `📦 *Your Product:* ${product.title}\n` +
-          `💰 *Price:* ${product.price} ETB\n` +
-          `👤 *Buyer:* ${buyer.first_name} @${buyer.username}\n\n` +
-          `Please contact them to arrange the sale.`,
-          { parse_mode: 'Markdown' }
-        );
+        if (product.sellerId) {
+          await bot.sendMessage(product.sellerId,
+            `🎉 *NEW BUYER INTERESTED!*\n\n` +
+            `📦 *Your Product:* ${product.title}\n` +
+            `💰 *Price:* ${product.price} ETB\n` +
+            `👤 *Buyer:* ${buyer.first_name} @${buyer.username}\n\n` +
+            `💬 *Chat with buyer:* https://t.me/${buyer.username}\n\n` +
+            `Please contact them to arrange the sale.`,
+            { parse_mode: 'Markdown' }
+          );
+        }
 
         await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Seller notified!' });
+      } else {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Product not found' });
       }
     }
 
@@ -282,15 +303,18 @@ bot.on('callback_query', async (callbackQuery) => {
       
       if (product) {
         await bot.sendMessage(chatId,
-          `📞 *Seller Contact*\n\n` +
+          `📞 *Seller Contact Information*\n\n` +
           `👤 *Seller:* @${product.sellerUsername}\n` +
           `📦 *Product:* ${product.title}\n` +
           `💰 *Price:* ${product.price} ETB\n\n` +
-          `Send them a direct message!`,
+          `💬 *Direct Message:* https://t.me/${product.sellerUsername}\n\n` +
+          `Send them a message to inquire about the product!`,
           { parse_mode: 'Markdown' }
         );
 
         await bot.answerCallbackQuery(callbackQuery.id, { text: '✅ Contact info sent' });
+      } else {
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Product not found' });
       }
     }
 
@@ -309,7 +333,7 @@ bot.onText(/\/myproducts|📋 My Products/, async (msg) => {
     let userProducts = [];
     products.forEach((product, id) => {
       if (product.sellerId === userId) {
-        userProducts.push(product);
+        userProducts.push({...product, id});
       }
     });
 
@@ -317,18 +341,19 @@ bot.onText(/\/myproducts|📋 My Products/, async (msg) => {
       bot.sendMessage(chatId, 
         `📋 *My Products*\n\n` +
         `You haven't listed any products yet.\n\n` +
-        `Use "➕ Add Product" to get started!`,
+        `Use "➕ Add Product" to list your first item!`,
         { parse_mode: 'Markdown' }
       );
       return;
     }
 
-    let message = `📋 *Your Products*\n\n`;
+    let message = `📋 *Your Products (${userProducts.length})*\n\n`;
     
     userProducts.forEach((product, index) => {
       message += `${index + 1}. 🏷️ *${product.title}*\n`;
       message += `   💰 ${product.price} ETB\n`;
-      message += `   ✅ Status: Approved\n\n`;
+      message += `   📅 ${product.createdAt.toLocaleDateString()}\n`;
+      message += `   ✅ Status: ${product.status}\n\n`;
     });
 
     bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
@@ -346,22 +371,33 @@ bot.onText(/\/help|ℹ️ Help/, async (msg) => {
   bot.sendMessage(chatId,
     `ℹ️ *Jimma University Marketplace Help*\n\n` +
     `*How to Sell:*\n` +
-    `1. Use "➕ Add Product"\n` +
+    `1. Click "➕ Add Product"\n` +
     `2. Send product photo\n` +
-    `3. Add title and price\n` +
-    `4. Your product goes live!\n\n` +
+    `3. Enter title and price\n` +
+    `4. Your product goes live instantly!\n\n` +
     `*How to Buy:*\n` +
-    `1. Use "🛍️ Browse Products"\n` +
-    `2. Click "BUY NOW" or "CONTACT SELLER"\n` +
-    `3. Contact the seller directly\n\n` +
-    `*Commands:*\n` +
-    `/start - Start bot\n` +
-    `/addproduct - List product\n` +
-    `/browse - View products\n` +
-    `/myproducts - Your listings\n` +
-    `/help - This message`,
+    `1. Click "🛍️ Browse Products" \n` +
+    `2. View available items with photos\n` +
+    `3. Click "BUY NOW" or "CONTACT SELLER"\n` +
+    `4. Arrange campus meetup\n\n` +
+    `*Safety Tips:*\n` +
+    `• Meet in public campus areas\n` +
+    `• Check product before paying\n` +
+    `• Use cash transactions\n` +
+    `• Bring a friend if possible\n\n` +
+    `*Need Help?*\n` +
+    `Contact: @${ADMIN_IDS[0] || 'admin'}`,
     { parse_mode: 'Markdown' }
   );
 });
 
-console.log('🎉 Bot is ready! Use /start to begin.');
+// Error handling
+bot.on('error', (error) => {
+  console.error('❌ Bot error:', error);
+});
+
+bot.on('polling_error', (error) => {
+  console.error('❌ Polling error:', error);
+});
+
+console.log('🎉 Marketplace bot is fully operational!');
