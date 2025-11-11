@@ -1,7 +1,7 @@
 {
-  "name": "image-gallery-bot",
+  "name": "ju-marketplace-bot",
   "version": "1.0.0",
-  "description": "Telegram Image Gallery Bot with Channel Posting",
+  "description": "Jimma University Student Marketplace Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
