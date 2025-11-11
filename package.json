@@ -1,7 +1,7 @@
 {
-  "name": "simple-echo-bot",
+  "name": "image-gallery-bot",
   "version": "1.0.0",
-  "description": "Simple Telegram Echo Bot",
+  "description": "Telegram bot for uploading and viewing images",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
