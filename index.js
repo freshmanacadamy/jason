@@ -6,10 +6,12 @@ const app = express();
 app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+const CHANNEL_ID = process.env.CHANNEL_ID || '@jumarket'; // Your channel username or ID
+
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 app.get('/', (req, res) => {
-  res.send('🤖 Image Gallery Bot is alive!');
+  res.send('🤖 Image Gallery Bot with Channel Posting!');
 });
 
 const PORT = process.env.PORT || 3000;
@@ -17,7 +19,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-console.log('✅ Image Gallery Bot started!');
+console.log('✅ Image Gallery Bot with Channel Posting started!');
 
 // Store user images
 const userImages = new Map();
@@ -28,7 +30,7 @@ const showMainMenu = (chatId) => {
     reply_markup: {
       keyboard: [
         [{ text: '📸 Upload Image' }, { text: '🖼️ See Your Images' }],
-        [{ text: 'ℹ️ Help' }]
+        [{ text: '📢 Post to Channel' }, { text: 'ℹ️ Help' }]
       ],
       resize_keyboard: true,
       one_time_keyboard: false
@@ -37,7 +39,7 @@ const showMainMenu = (chatId) => {
   
   bot.sendMessage(chatId, 
     `🖼️ *Image Gallery Bot*\n\n` +
-    `Upload your images and view them anytime!\n\n` +
+    `Upload images and post them to our channel!\n\n` +
     `Choose an option:`,
     { parse_mode: 'Markdown', ...options }
   );
@@ -48,7 +50,6 @@ bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   
-  // Initialize user storage if not exists
   if (!userImages.has(userId)) {
     userImages.set(userId, []);
   }
@@ -56,7 +57,8 @@ bot.onText(/\/start/, (msg) => {
   bot.sendMessage(chatId, 
     `👋 Welcome to Image Gallery!\n\n` +
     `📸 *Upload* - Add your images\n` +
-    `🖼️ *See Your Images* - View all your uploaded images\n\n` +
+    `🖼️ *See Your Images* - View your gallery\n` +
+    `📢 *Post to Channel* - Share images to ${CHANNEL_ID}\n\n` +
     `Start by uploading your first image!`,
     { parse_mode: 'Markdown' }
   );
@@ -69,7 +71,6 @@ bot.onText(/\/upload|📸 Upload Image/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   
-  // Initialize user storage if not exists
   if (!userImages.has(userId)) {
     userImages.set(userId, []);
   }
@@ -77,7 +78,7 @@ bot.onText(/\/upload|📸 Upload Image/, (msg) => {
   bot.sendMessage(chatId, 
     `📸 *Upload Image*\n\n` +
     `Send me a photo and I'll save it to your gallery!\n\n` +
-    `You can upload multiple images.`,
+    `After uploading, you can post it to ${CHANNEL_ID}`,
     { parse_mode: 'Markdown' }
   );
 });
@@ -88,30 +89,42 @@ bot.on('photo', (msg) => {
   const userId = msg.from.id;
   const photo = msg.photo[msg.photo.length - 1];
   
-  // Initialize user storage if not exists
   if (!userImages.has(userId)) {
     userImages.set(userId, []);
   }
   
   const userImageList = userImages.get(userId);
   
-  // Save image info
   const imageData = {
     fileId: photo.file_id,
     timestamp: new Date(),
     fileSize: photo.file_size,
-    messageId: msg.message_id
+    messageId: msg.message_id,
+    caption: '' // User can add caption later
   };
   
   userImageList.push(imageData);
   
+  // Ask if user wants to add caption and post to channel
+  const postKeyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: '✏️ Add Caption & Post', callback_data: `caption_${userImageList.length - 1}` },
+          { text: '📢 Post Now', callback_data: `post_${userImageList.length - 1}` }
+        ],
+        [
+          { text: '💾 Save Only', callback_data: 'save_only' }
+        ]
+      ]
+    }
+  };
+  
   bot.sendMessage(chatId,
     `✅ *Image Uploaded Successfully!*\n\n` +
-    `🖼️ Image #${userImageList.length} saved to your gallery\n` +
-    `📅 Uploaded: ${imageData.timestamp.toLocaleString()}\n` +
-    `💾 Size: ${(photo.file_size / 1024).toFixed(1)} KB\n\n` +
-    `Click "🖼️ See Your Images" to view all your photos!`,
-    { parse_mode: 'Markdown' }
+    `🖼️ Image #${userImageList.length} saved to your gallery\n\n` +
+    `Would you like to post this image to ${CHANNEL_ID}?`,
+    { parse_mode: 'Markdown', ...postKeyboard }
   );
 });
 
@@ -125,28 +138,30 @@ bot.onText(/\/gallery|🖼️ See Your Images/, (msg) => {
   if (userImageList.length === 0) {
     bot.sendMessage(chatId,
       `🖼️ *Your Image Gallery*\n\n` +
-      `You haven't uploaded any images yet!\n\n` +
-      `Click "📸 Upload Image" to add your first photo.`,
+      `No images yet! Use "📸 Upload Image" first.`,
       { parse_mode: 'Markdown' }
     );
     return;
   }
   
-  // Send gallery summary
   bot.sendMessage(chatId,
     `🖼️ *Your Image Gallery*\n\n` +
-    `You have ${userImageList.length} image(s) in your gallery:\n\n` +
-    `Scroll down to view all your images 👇`,
+    `You have ${userImageList.length} image(s)\n\n` +
+    `Scroll down to view 👇`,
     { parse_mode: 'Markdown' }
   );
   
-  // Send each image with navigation buttons
+  // Send each image with posting options
   userImageList.forEach((image, index) => {
     const keyboard = {
       reply_markup: {
         inline_keyboard: [
           [
-            { text: `🖼️ Image ${index + 1}/${userImageList.length}`, callback_data: 'image_info' },
+            { text: `🖼️ ${index + 1}/${userImageList.length}`, callback_data: 'info' },
+            { text: '📢 Post to Channel', callback_data: `post_${index}` }
+          ],
+          [
+            { text: '✏️ Add Caption', callback_data: `addcaption_${index}` },
             { text: '🗑️ Delete', callback_data: `delete_${index}` }
           ],
           [
@@ -157,17 +172,62 @@ bot.onText(/\/gallery|🖼️ See Your Images/, (msg) => {
       }
     };
     
+    const caption = image.caption 
+      ? `📝 ${image.caption}\n\n🖼️ Image ${index + 1}/${userImageList.length}`
+      : `🖼️ Image ${index + 1}/${userImageList.length}\n\nClick "✏️ Add Caption" to add text`;
+    
     bot.sendPhoto(chatId, image.fileId, {
-      caption: `🖼️ *Your Image ${index + 1}/${userImageList.length}*\n\n` +
-               `📅 Uploaded: ${image.timestamp.toLocaleString()}\n` +
-               `💾 Size: ${(image.fileSize / 1024).toFixed(1)} KB`,
+      caption: caption,
       parse_mode: 'Markdown',
       reply_markup: keyboard.reply_markup
     });
   });
 });
 
-// ========== GALLERY CONTROLS ========== //
+// ========== POST TO CHANNEL MENU ========== //
+bot.onText(/\/post|📢 Post to Channel/, (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  const userImageList = userImages.get(userId) || [];
+  
+  if (userImageList.length === 0) {
+    bot.sendMessage(chatId,
+      `📢 *Post to Channel*\n\n` +
+      `You need to upload images first!\n\n` +
+      `Use "📸 Upload Image" to add photos to your gallery.`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  
+  const channelKeyboard = {
+    reply_markup: {
+      inline_keyboard: [
+        ...userImageList.map((image, index) => [
+          { 
+            text: `🖼️ Image ${index + 1} ${image.caption ? '📝' : ''}`, 
+            callback_data: `channelpost_${index}` 
+          }
+        ]),
+        [
+          { text: '📢 Post All Images', callback_data: 'post_all' }
+        ]
+      ]
+    }
+  };
+  
+  bot.sendMessage(chatId,
+    `📢 *Post to ${CHANNEL_ID}*\n\n` +
+    `Select an image to post to our channel:\n\n` +
+    `🖼️ - Image without caption\n` +
+    `📝 - Image with caption\n\n` +
+    `You can also post all images at once!`,
+    { parse_mode: 'Markdown', ...channelKeyboard }
+  );
+});
+
+// ========== CALLBACK QUERY HANDLER ========== //
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const chatId = message.chat.id;
@@ -177,163 +237,277 @@ bot.on('callback_query', async (callbackQuery) => {
   const userImageList = userImages.get(userId) || [];
   
   try {
-    if (data === 'image_info') {
+    // Post image to channel immediately
+    if (data.startsWith('post_')) {
+      const index = parseInt(data.replace('post_', ''));
+      const image = userImageList[index];
+      
+      if (image) {
+        try {
+          // Post to channel
+          await bot.sendPhoto(CHANNEL_ID, image.fileId, {
+            caption: image.caption || `📸 Shared via Image Gallery Bot\n👤 Posted by: @${callbackQuery.from.username || 'User'}`,
+            parse_mode: 'Markdown'
+          });
+          
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: `✅ Image posted to ${CHANNEL_ID}!`
+          });
+          
+          await bot.sendMessage(chatId,
+            `📢 *Posted to Channel!*\n\n` +
+            `Your image has been successfully posted to ${CHANNEL_ID}\n\n` +
+            `Check it out in the channel! 🎉`,
+            { parse_mode: 'Markdown' }
+          );
+          
+        } catch (channelError) {
+          console.error('Channel post error:', channelError);
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Failed to post to channel'
+          });
+        }
+      }
+      return;
+    }
+    
+    // Add caption before posting
+    if (data.startsWith('caption_')) {
+      const index = parseInt(data.replace('caption_', ''));
+      const userState = { action: 'awaiting_caption', imageIndex: index };
+      
+      // Store user state for caption input
+      if (!userImages.has(`state_${userId}`)) {
+        userImages.set(`state_${userId}`, userState);
+      } else {
+        userImages.set(`state_${userId}`, userState);
+      }
+      
+      await bot.sendMessage(chatId,
+        `✏️ *Add Caption for Channel Post*\n\n` +
+        `Please send the caption text for this image.\n\n` +
+        `It will be posted to ${CHANNEL_ID}\n\n` +
+        `Type /cancel to skip caption.`,
+        { parse_mode: 'Markdown' }
+      );
+      
       await bot.answerCallbackQuery(callbackQuery.id, {
-        text: `You have ${userImageList.length} images in gallery`
+        text: '📝 Please enter caption'
       });
       return;
     }
     
-    if (data.startsWith('delete_')) {
-      const index = parseInt(data.replace('delete_', ''));
+    // Add caption to existing image
+    if (data.startsWith('addcaption_')) {
+      const index = parseInt(data.replace('addcaption_', ''));
+      const userState = { action: 'add_caption', imageIndex: index };
+      userImages.set(`state_${userId}`, userState);
       
-      if (userImageList[index]) {
-        userImageList.splice(index, 1);
-        await bot.answerCallbackQuery(callbackQuery.id, {
-          text: '✅ Image deleted from gallery'
-        });
+      await bot.sendMessage(chatId,
+        `✏️ *Add Caption*\n\n` +
+        `Send the caption for this image:\n\n` +
+        `Type /cancel to skip.`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      await bot.answerCallbackQuery(callbackQuery.id, {
+        text: '📝 Enter caption text'
+      });
+      return;
+    }
+    
+    // Post specific image to channel from menu
+    if (data.startsWith('channelpost_')) {
+      const index = parseInt(data.replace('channelpost_', ''));
+      const image = userImageList[index];
+      
+      if (image) {
+        const confirmKeyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Yes, Post Now', callback_data: `confirmpost_${index}` },
+                { text: '✏️ Add Caption First', callback_data: `caption_${index}` }
+              ],
+              [
+                { text: '❌ Cancel', callback_data: 'cancel_post' }
+              ]
+            ]
+          }
+        };
         
-        // Update the message
-        await bot.editMessageCaption('🗑️ *Image Deleted*\n\nThis image has been removed from your gallery.', {
+        await bot.sendMessage(chatId,
+          `📢 *Post Image ${index + 1} to ${CHANNEL_ID}?*\n\n` +
+          `This will share your image with the channel audience.\n\n` +
+          `Caption: ${image.caption || 'No caption'}`,
+          { parse_mode: 'Markdown', ...confirmKeyboard }
+        );
+        
+        await bot.answerCallbackQuery(callbackQuery.id, {
+          text: 'Confirm channel post'
+        });
+      }
+      return;
+    }
+    
+    // Confirm and post to channel
+    if (data.startsWith('confirmpost_')) {
+      const index = parseInt(data.replace('confirmpost_', ''));
+      const image = userImageList[index];
+      
+      if (image) {
+        try {
+          await bot.sendPhoto(CHANNEL_ID, image.fileId, {
+            caption: image.caption || `📸 Shared via Image Gallery Bot\n👤 Posted by: @${callbackQuery.from.username || 'User'}`,
+            parse_mode: 'Markdown'
+          });
+          
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: `✅ Posted to ${CHANNEL_ID}!`
+          });
+          
+          await bot.editMessageText(
+            `📢 *Successfully Posted!*\n\n` +
+            `Your image has been shared in ${CHANNEL_ID}\n\n` +
+            `Thank you for sharing! 🎉`,
+            {
+              chat_id: chatId,
+              message_id: message.message_id,
+              parse_mode: 'Markdown'
+            }
+          );
+          
+        } catch (error) {
+          console.error('Channel post error:', error);
+          await bot.answerCallbackQuery(callbackQuery.id, {
+            text: '❌ Failed to post to channel'
+          });
+        }
+      }
+      return;
+    }
+    
+    // Post all images to channel
+    if (data === 'post_all') {
+      let postedCount = 0;
+      
+      for (let i = 0; i < userImageList.length; i++) {
+        const image = userImageList[i];
+        try {
+          await bot.sendPhoto(CHANNEL_ID, image.fileId, {
+            caption: image.caption || `📸 Image ${i + 1} shared via Image Gallery Bot`,
+            parse_mode: 'Markdown'
+          });
+          postedCount++;
+          
+          // Small delay between posts to avoid rate limits
+          if (i < userImageList.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          console.error(`Failed to post image ${i + 1}:`, error);
+        }
+      }
+      
+      await bot.answerCallbackQuery(callbackQuery.id, {
+        text: `✅ Posted ${postedCount}/${userImageList.length} images!`
+      });
+      
+      await bot.editMessageText(
+        `📢 *Bulk Post Complete!*\n\n` +
+        `Successfully posted ${postedCount} images to ${CHANNEL_ID}\n\n` +
+        `Check the channel to see all your shared images! 🎉`,
+        {
           chat_id: chatId,
           message_id: message.message_id,
           parse_mode: 'Markdown'
-        });
-      }
+        }
+      );
       return;
     }
     
-    if (data.startsWith('prev_')) {
-      const currentIndex = parseInt(data.replace('prev_', ''));
-      const prevIndex = currentIndex > 0 ? currentIndex - 1 : userImageList.length - 1;
-      const image = userImageList[prevIndex];
-      
-      if (image) {
-        await bot.editMessageMedia(
-          {
-            type: 'photo',
-            media: image.fileId,
-            caption: `🖼️ *Your Image ${prevIndex + 1}/${userImageList.length}*\n\n` +
-                     `📅 Uploaded: ${image.timestamp.toLocaleString()}\n` +
-                     `💾 Size: ${(image.fileSize / 1024).toFixed(1)} KB`,
-            parse_mode: 'Markdown'
-          },
-          {
-            chat_id: chatId,
-            message_id: message.message_id,
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: `🖼️ Image ${prevIndex + 1}/${userImageList.length}`, callback_data: 'image_info' },
-                  { text: '🗑️ Delete', callback_data: `delete_${prevIndex}` }
-                ],
-                [
-                  { text: '⬅️ Previous', callback_data: `prev_${prevIndex}` },
-                  { text: 'Next ➡️', callback_data: `next_${prevIndex}` }
-                ]
-              ]
-            }
-          }
-        );
-        
-        await bot.answerCallbackQuery(callbackQuery.id, {
-          text: `Image ${prevIndex + 1}/${userImageList.length}`
-        });
-      }
+    // Handle caption input from text messages
+    if (data === 'save_only') {
+      await bot.answerCallbackQuery(callbackQuery.id, {
+        text: '✅ Image saved to gallery'
+      });
       return;
     }
     
-    if (data.startsWith('next_')) {
-      const currentIndex = parseInt(data.replace('next_', ''));
-      const nextIndex = currentIndex < userImageList.length - 1 ? currentIndex + 1 : 0;
-      const image = userImageList[nextIndex];
-      
-      if (image) {
-        await bot.editMessageMedia(
-          {
-            type: 'photo',
-            media: image.fileId,
-            caption: `🖼️ *Your Image ${nextIndex + 1}/${userImageList.length}*\n\n` +
-                     `📅 Uploaded: ${image.timestamp.toLocaleString()}\n` +
-                     `💾 Size: ${(image.fileSize / 1024).toFixed(1)} KB`,
-            parse_mode: 'Markdown'
-          },
-          {
-            chat_id: chatId,
-            message_id: message.message_id,
-            reply_markup: {
-              inline_keyboard: [
-                [
-                  { text: `🖼️ Image ${nextIndex + 1}/${userImageList.length}`, callback_data: 'image_info' },
-                  { text: '🗑️ Delete', callback_data: `delete_${nextIndex}` }
-                ],
-                [
-                  { text: '⬅️ Previous', callback_data: `prev_${nextIndex}` },
-                  { text: 'Next ➡️', callback_data: `next_${nextIndex}` }
-                ]
-              ]
-            }
-          }
-        );
-        
-        await bot.answerCallbackQuery(callbackQuery.id, {
-          text: `Image ${nextIndex + 1}/${userImageList.length}`
-        });
-      }
-      return;
-    }
+    // Keep your existing navigation and delete handlers here...
+    // [Previous/Next/Delete code from earlier version]
     
   } catch (error) {
-    console.error('Gallery control error:', error);
+    console.error('Callback error:', error);
     await bot.answerCallbackQuery(callbackQuery.id, {
       text: '❌ Error processing request'
     });
   }
 });
 
-// ========== HELP COMMAND ========== //
-bot.onText(/\/help|ℹ️ Help/, (msg) => {
+// ========== HANDLE CAPTION INPUT ========== //
+bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const text = msg.text;
   
-  bot.sendMessage(chatId,
-    `ℹ️ *Image Gallery Bot Help*\n\n` +
-    `*How to Use:*\n` +
-    `📸 *Upload Image* - Send photos to save in your gallery\n` +
-    `🖼️ *See Your Images* - View all your uploaded images\n\n` +
-    `*Gallery Features:*\n` +
-    `• Navigate with Previous/Next buttons\n` +
-    `• Delete images you don't want\n` +
-    `• View upload date and file size\n` +
-    `• All images stored securely\n\n` +
-    `*Commands:*\n` +
-    `/start - Start the bot\n` +
-    `/upload - Upload images\n` +
-    `/gallery - View your images\n` +
-    `/help - This message`,
-    { parse_mode: 'Markdown' }
-  );
+  if (!text || text.startsWith('/')) return;
+  
+  const userState = userImages.get(`state_${userId}`);
+  const userImageList = userImages.get(userId) || [];
+  
+  if (userState && (userState.action === 'awaiting_caption' || userState.action === 'add_caption')) {
+    const imageIndex = userState.imageIndex;
+    
+    if (userImageList[imageIndex]) {
+      // Save caption
+      userImageList[imageIndex].caption = text;
+      userImages.delete(`state_${userId}`);
+      
+      // If it was for immediate posting
+      if (userState.action === 'awaiting_caption') {
+        try {
+          // Post to channel with new caption
+          await bot.sendPhoto(CHANNEL_ID, userImageList[imageIndex].fileId, {
+            caption: text,
+            parse_mode: 'Markdown'
+          });
+          
+          await bot.sendMessage(chatId,
+            `📢 *Posted to Channel with Caption!*\n\n` +
+            `"${text}"\n\n` +
+            `Your image has been posted to ${CHANNEL_ID} 🎉`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (error) {
+          await bot.sendMessage(chatId,
+            `❌ Failed to post to channel, but caption was saved.\n\n` +
+            `You can try posting again from "📢 Post to Channel" menu.`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      } else {
+        // Just saved caption
+        await bot.sendMessage(chatId,
+          `✅ *Caption Added!*\n\n` +
+          `"${text}"\n\n` +
+          `Caption saved for this image. You can post it to channel anytime.`,
+          { parse_mode: 'Markdown' }
+        );
+      }
+    }
+  }
 });
 
-// ========== ADMIN COMMAND (View Stats) ========== //
-bot.onText(/\/stats/, (msg) => {
+// Cancel command
+bot.onText(/\/cancel/, (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
   
-  let totalImages = 0;
-  let totalUsers = 0;
-  
-  userImages.forEach((images, userId) => {
-    totalUsers++;
-    totalImages += images.length;
-  });
-  
-  bot.sendMessage(chatId,
-    `📊 *Bot Statistics*\n\n` +
-    `👥 Total Users: ${totalUsers}\n` +
-    `🖼️ Total Images: ${totalImages}\n` +
-    `💾 Storage: Memory (temporary)\n\n` +
-    `*Note:* Images are stored temporarily and will be lost when bot restarts.`,
-    { parse_mode: 'Markdown' }
-  );
+  if (userImages.has(`state_${userId}`)) {
+    userImages.delete(`state_${userId}`);
+    bot.sendMessage(chatId, '❌ Action cancelled.');
+  }
 });
 
-console.log('🎉 Image Gallery Bot ready! Users can upload and view images.');
+console.log('🎉 Image Gallery Bot with Channel Posting ready!');
