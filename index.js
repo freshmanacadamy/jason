@@ -73,7 +73,7 @@ bot.onText(/\/start/, async (msg) => {
   if (!users.has(userId)) {
     users.set(userId, {
       telegramId: userId,
-      username: username,
+      username: msg.from.username || '',  // ✅ FIX: Get directly from message
       firstName: msg.from.first_name,
       joinedAt: new Date(),
       department: '',
@@ -420,7 +420,7 @@ async function completeProductCreation(chatId, userId, userState, category, call
   const product = {
     id: productIdCounter++,
     sellerId: userId,
-    sellerUsername: user.username,
+    sellerUsername: user.username || '',  // ✅ FIX: Handle undefined
     title: userState.productData.title,
     description: userState.productData.description || '',
     price: userState.productData.price,
@@ -787,7 +787,10 @@ bot.onText(/\/pending/, async (msg) => {
 
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
-  const chatId = message.chat.id;
+  // 🔥 CRITICAL FIX: Check if this is from a channel
+const isChannelMessage = message.chat.type === 'channel' || message.chat.id.toString().startsWith('-100');
+// If it's from channel, use user's private chat ID instead
+const responseChatId = isChannelMessage ? userId : message.chat.id;
   const userId = callbackQuery.from.id;
   const data = callbackQuery.data;
   
