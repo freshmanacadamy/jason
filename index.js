@@ -1,3 +1,4 @@
+
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
@@ -6,10 +7,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Express server for 24/7
-app.use(express.json());
-
 app.get('/', (req, res) => {
-  res.send('🎓 Lecture Class Registration Bot is Running!');
+  res.send('🤖 Registration Bot with Photo Upload is Running!');
 });
 
 app.get('/health', (req, res) => {
@@ -20,77 +19,55 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Telegram Bot - FIXED: Simple polling without conflicts
+// Telegram Bot
 const token = process.env.BOT_TOKEN;
-const bot = new TelegramBot(token, { 
-  polling: true 
-});
+const bot = new TelegramBot(token, { polling: true });
 
-// Handle polling errors gracefully
-bot.on('polling_error', (error) => {
-  console.log('🔄 Polling error, restarting...', error.code);
-});
-
-console.log('✅ Bot started with polling');
-
-// ========== DATABASE SETUP ==========
-const db = new sqlite3.Database(':memory:'); // Use ':memory:' for testing, change to 'students.db' for production
-
+// Database setup
+const db = new sqlite3.Database('users.db');
 db.run(`
-  CREATE TABLE IF NOT EXISTS students (
+  CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chat_id INTEGER,
+    username TEXT,
     full_name TEXT,
-    department TEXT,
-    student_id TEXT,
-    profile_photo_id TEXT,
-    id_card_photo_id TEXT,
+    email TEXT,
+    phone TEXT,
+    photo_id TEXT,
     status TEXT DEFAULT 'pending',
     registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )
 `);
 
-// Admin chat ID - REPLACE WITH YOUR ACTUAL CHAT ID
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '123456789';
+db.run(`
+  CREATE TABLE IF NOT EXISTS admins (
+    chat_id INTEGER PRIMARY KEY,
+    username TEXT
+  )
+`);
+
+// Admin chat ID - replace with your actual Telegram chat ID
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '123456789'; // Your personal Telegram chat ID
 
 // Store user registration state
 const userStates = {};
 
-// Available departments
-const departments = [
-  'Computer Science',
-  'Electrical Engineering', 
-  'Mechanical Engineering',
-  'Civil Engineering',
-  'Business Administration',
-  'Medicine',
-  'Law',
-  'Arts & Humanities',
-  'Science & Technology',
-  'Other'
-];
-
-// ========== BUTTON HANDLERS - FIXED ==========
-
 // Start command with registration buttons
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
+  const username = msg.from.username || 'No username';
   
-  const welcomeMessage = `🎓 Welcome to Freshman Tutorial Class Registration!
-
-Dear ${msg.from.first_name},
-
-We're excited to invite you to register for our freshman tutorial classes!`;
-
+  const welcomeMessage = `👋 Welcome ${msg.from.first_name}!\n\nI can help you with registration. Please choose an option:`;
+  
   const options = {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '📝 Register Now', callback_data: 'start_registration' },
-          { text: 'ℹ️ About Program', callback_data: 'about_program' }
+          { text: '📝 Start Registration', callback_data: 'start_registration' },
+          { text: 'ℹ️ About Us', callback_data: 'about' }
         ],
         [
-          { text: '📞 Contact Coordinators', callback_data: 'contact_coordinators' }
+          { text: '📞 Contact Admin', callback_data: 'contact_admin' }
         ]
       ]
     }
@@ -99,258 +76,271 @@ We're excited to invite you to register for our freshman tutorial classes!`;
   bot.sendMessage(chatId, welcomeMessage, options);
 });
 
-// ========== CALLBACK QUERY HANDLER - FIXED ==========
-bot.on('callback_query', (callbackQuery) => {
+// Handle button callbacks
+bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const chatId = message.chat.id;
   const data = callbackQuery.data;
 
-  console.log(`🔄 Button clicked: ${data} by user: ${chatId}`);
-
   try {
-    // ALWAYS answer the callback query first
-    bot.answerCallbackQuery(callbackQuery.id);
-
     if (data === 'start_registration') {
-      startRegistration(chatId, callbackQuery.from);
-    } 
-    else if (data === 'about_program') {
-      bot.sendMessage(chatId, 
-        `🎯 **Freshman Tutorial Program**\n\nOur program connects freshmen with experienced senior tutors!`
-      );
-    } 
-    else if (data === 'contact_coordinators') {
-      bot.sendMessage(chatId, '📞 Contact: tutors@university.edu');
+      await startRegistration(chatId, callbackQuery.from);
+    } else if (data === 'about') {
+      await bot.sendMessage(chatId, '🤖 We provide amazing services! Contact us for more information.');
+    } else if (data === 'contact_admin') {
+      await bot.sendMessage(chatId, '📞 Please contact our admin directly or use the registration form.');
+    } else if (data === 'submit_registration') {
+      await submitRegistration(chatId);
+    } else if (data === 'cancel_registration') {
+      await cancelRegistration(chatId);
     }
-    else if (data === 'submit_registration') {
-      submitRegistration(chatId);
-    }
-    else if (data === 'cancel_registration') {
-      cancelRegistration(chatId);
-    }
-    else if (data.startsWith('dept_')) {
-      const deptIndex = parseInt(data.replace('dept_', ''));
-      const department = departments[deptIndex];
-      
-      if (userStates[chatId] && userStates[chatId].step === 'waiting_department') {
-        userStates[chatId].data.department = department;
-        userStates[chatId].step = 'waiting_student_id';
-        
-        bot.sendMessage(chatId, `✅ Department selected: ${department}`);
-        bot.sendMessage(chatId, 'Step 3: Please send your student ID number:');
-      }
-    }
-
+    
+    // Answer callback query to remove loading state
+    bot.answerCallbackQuery(callbackQuery.id);
   } catch (error) {
-    console.error('❌ Callback error:', error);
-    bot.sendMessage(chatId, '❌ Error occurred! Please try again.');
+    console.error('Callback error:', error);
+    bot.answerCallbackQuery(callbackQuery.id, { text: 'Error occurred!' });
   }
 });
 
-// ========== REGISTRATION FUNCTIONS ==========
-
-function startRegistration(chatId, user) {
+// Start registration process
+async function startRegistration(chatId, user) {
   userStates[chatId] = {
     step: 'waiting_full_name',
     data: {
+      username: user.username,
       full_name: '',
-      department: '',
-      student_id: '',
-      profile_photo_id: '',
-      id_card_photo_id: ''
+      email: '',
+      phone: '',
+      photo_id: ''
     }
   };
   
-  const registrationMessage = `📝 Registration Started!\n\nPlease follow these steps:\n\n1. Your full name\n2. Your department\n3. Student ID\n4. Profile photo\n5. ID card photo`;
+  const registrationMessage = `📝 Registration Started!\n\nPlease follow these steps:\n\n1. Send your full name\n2. Send your email\n3. Send your phone number\n4. Upload a profile photo\n\nYou can cancel anytime using /cancel`;
   
   const options = {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '❌ Cancel', callback_data: 'cancel_registration' }]
+        [{ text: '❌ Cancel Registration', callback_data: 'cancel_registration' }]
       ]
     }
   };
   
-  bot.sendMessage(chatId, registrationMessage, options);
-  bot.sendMessage(chatId, 'Step 1: Please send your full name:');
-}
-
-function showDepartmentSelection(chatId) {
-  const state = userStates[chatId];
-  state.step = 'waiting_department';
-  
-  // Create department buttons
-  const departmentButtons = [];
-  for (let i = 0; i < departments.length; i += 2) {
-    const row = [];
-    if (departments[i]) row.push({ text: departments[i], callback_data: `dept_${i}` });
-    if (departments[i + 1]) row.push({ text: departments[i + 1], callback_data: `dept_${i + 1}` });
-    departmentButtons.push(row);
-  }
-
-  const options = {
-    reply_markup: {
-      inline_keyboard: departmentButtons
-    }
-  };
-  
-  bot.sendMessage(chatId, 'Step 2: Please select your department:', options);
+  await bot.sendMessage(chatId, registrationMessage, options);
+  await bot.sendMessage(chatId, 'Step 1: Please send your full name:');
 }
 
 // Handle messages during registration
-bot.on('message', (msg) => {
+bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
-
-  // Skip commands
-  if (text?.startsWith('/')) return;
-
-  if (!userStates[chatId]) return;
-
+  
+  // Skip if it's a command or user not in registration
+  if (!userStates[chatId] || msg.text?.startsWith('/')) return;
+  
   const state = userStates[chatId];
-
+  
   try {
     if (state.step === 'waiting_full_name') {
       state.data.full_name = text;
-      showDepartmentSelection(chatId);
-    } 
-    else if (state.step === 'waiting_student_id') {
-      state.data.student_id = text;
-      state.step = 'waiting_profile_photo';
-      bot.sendMessage(chatId, 'Step 4: Please upload your profile photo:');
+      state.step = 'waiting_email';
+      await bot.sendMessage(chatId, 'Step 2: Please send your email:');
+      
+    } else if (state.step === 'waiting_email') {
+      // Simple email validation
+      if (!text.includes('@')) {
+        await bot.sendMessage(chatId, '❌ Please enter a valid email address:');
+        return;
+      }
+      state.data.email = text;
+      state.step = 'waiting_phone';
+      await bot.sendMessage(chatId, 'Step 3: Please send your phone number:');
+      
+    } else if (state.step === 'waiting_phone') {
+      state.data.phone = text;
+      state.step = 'waiting_photo';
+      await bot.sendMessage(chatId, 'Step 4: Please upload your profile photo:');
     }
   } catch (error) {
     console.error('Message handling error:', error);
-    bot.sendMessage(chatId, '❌ Error occurred!');
+    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
   }
 });
 
-// Handle photos
-bot.on('photo', (msg) => {
+// Handle photo uploads
+bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
-  const state = userStates[chatId];
   
-  if (!state) return;
-
+  if (!userStates[chatId] || userStates[chatId].step !== 'waiting_photo') return;
+  
   try {
+    // Get the largest photo version
     const photo = msg.photo[msg.photo.length - 1];
     const fileId = photo.file_id;
+    
+    userStates[chatId].data.photo_id = fileId;
+    userStates[chatId].step = 'completed';
+    
+    // Show registration summary
+    const userData = userStates[chatId].data;
+    const summary = `
+✅ Registration Complete!
 
-    if (state.step === 'waiting_profile_photo') {
-      state.data.profile_photo_id = fileId;
-      state.step = 'waiting_id_card_photo';
-      bot.sendMessage(chatId, '✅ Profile photo received!');
-      bot.sendMessage(chatId, 'Step 5: Please upload your ID card photo:');
-    } 
-    else if (state.step === 'waiting_id_card_photo') {
-      state.data.id_card_photo_id = fileId;
-      state.step = 'completed';
-      bot.sendMessage(chatId, '✅ ID card photo received!');
-      showRegistrationSummary(chatId);
-    }
+📋 Your Details:
+👤 Name: ${userData.full_name}
+📧 Email: ${userData.email}
+📞 Phone: ${userData.phone}
+🖼️ Photo: Uploaded
+
+Please review and submit your registration.
+    `;
+    
+    const options = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '✅ Submit Registration', callback_data: 'submit_registration' },
+            { text: '❌ Cancel', callback_data: 'cancel_registration' }
+          ]
+        ]
+      }
+    };
+    
+    // Send the uploaded photo back to user
+    await bot.sendPhoto(chatId, fileId, { caption: '📸 Your uploaded photo' });
+    await bot.sendMessage(chatId, summary, options);
+    
   } catch (error) {
-    console.error('Photo error:', error);
-    bot.sendMessage(chatId, '❌ Error processing photo!');
+    console.error('Photo handling error:', error);
+    await bot.sendMessage(chatId, '❌ Error processing photo. Please try again.');
   }
 });
 
-function showRegistrationSummary(chatId) {
-  const userData = userStates[chatId].data;
-  
-  const summary = `
-🎓 **Registration Complete!**
-
-👤 Name: ${userData.full_name}
-🏫 Department: ${userData.department}
-🆔 Student ID: ${userData.student_id}
-
-Please submit for approval.
-  `;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '✅ Submit', callback_data: 'submit_registration' },
-          { text: '❌ Cancel', callback_data: 'cancel_registration' }
-        ]
-      ]
-    }
-  };
-  
-  bot.sendMessage(chatId, summary, options);
-}
-
-function submitRegistration(chatId) {
+// Submit registration to admin
+async function submitRegistration(chatId) {
   try {
     const userData = userStates[chatId].data;
     
     // Save to database
     db.run(
-      `INSERT INTO students (chat_id, full_name, department, student_id, profile_photo_id, id_card_photo_id) 
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [chatId, userData.full_name, userData.department, userData.student_id, userData.profile_photo_id, userData.id_card_photo_id],
+      `INSERT INTO users (chat_id, username, full_name, email, phone, photo_id, status) 
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [chatId, userData.username, userData.full_name, userData.email, userData.phone, userData.photo_id, 'pending'],
       function(err) {
         if (err) {
           console.error('Database error:', err);
-          bot.sendMessage(chatId, '❌ Database error.');
+          bot.sendMessage(chatId, '❌ Database error. Please try again.');
           return;
         }
         
-        // Notify admin
-        const adminMessage = `🎓 New Registration!\n👤 ${userData.full_name}\n🏫 ${userData.department}`;
+        // Send notification to admin
+        const adminMessage = `
+🆕 NEW REGISTRATION!
+
+👤 User: ${userData.full_name}
+📧 Email: ${userData.email}
+📞 Phone: ${userData.phone}
+🤖 Username: @${userData.username}
+🆔 User ID: ${chatId}
+📅 Registered: ${new Date().toLocaleString()}
+        `;
+        
+        // Send text info to admin
         bot.sendMessage(ADMIN_CHAT_ID, adminMessage);
         
-        // Confirm to student
-        bot.sendMessage(chatId, '✅ Registration submitted successfully! Admin will contact you soon.');
+        // Send photo to admin if available
+        if (userData.photo_id) {
+          bot.sendPhoto(ADMIN_CHAT_ID, userData.photo_id, { 
+            caption: `📸 Profile photo from ${userData.full_name}` 
+          });
+        }
         
-        // Clear state
+        // Admin actions keyboard
+        const adminOptions = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: '✅ Approve User', callback_data: `approve_${chatId}` },
+                { text: '❌ Reject User', callback_data: `reject_${chatId}` }
+              ],
+              [
+                { text: '📞 Contact User', callback_data: `contact_${chatId}` }
+              ]
+            ]
+          }
+        };
+        
+        bot.sendMessage(ADMIN_CHAT_ID, 'Choose action:', adminOptions);
+        
+        // Confirm to user
+        bot.sendMessage(chatId, '✅ Your registration has been submitted! Admin will review it soon.');
+        
+        // Clear user state
         delete userStates[chatId];
       }
     );
   } catch (error) {
     console.error('Submission error:', error);
-    bot.sendMessage(chatId, '❌ Submission error!');
+    bot.sendMessage(chatId, '❌ Error submitting registration. Please try again.');
   }
 }
 
-function cancelRegistration(chatId) {
+// Cancel registration
+async function cancelRegistration(chatId) {
   delete userStates[chatId];
-  bot.sendMessage(chatId, '❌ Registration cancelled. Use /start to begin again.');
+  await bot.sendMessage(chatId, '❌ Registration cancelled. Use /start to begin again.');
 }
 
-// ========== TEST COMMAND ==========
-bot.onText(/\/test/, (msg) => {
+// Admin commands
+bot.onText(/\/admin/, (msg) => {
   const chatId = msg.chat.id;
+  
+  // Check if user is admin
+  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
+    bot.sendMessage(chatId, '❌ Access denied. Admin only.');
+    return;
+  }
+  
+  const adminMessage = `👑 Admin Panel\n\nChoose an action:`;
   
   const options = {
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: '🎯 TEST BUTTON 1', callback_data: 'test1' },
-          { text: '🎯 TEST BUTTON 2', callback_data: 'test2' }
-        ]
+        [{ text: '📊 View Statistics', callback_data: 'admin_stats' }],
+        [{ text: '👥 Pending Registrations', callback_data: 'admin_pending' }],
+        [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }]
       ]
     }
   };
   
-  bot.sendMessage(chatId, '🧪 TEST: Click a button below:', options);
+  bot.sendMessage(chatId, adminMessage, options);
 });
 
-// Test button handler
-bot.on('callback_query', (callbackQuery) => {
+// Handle admin callbacks
+bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
   const chatId = message.chat.id;
   const data = callbackQuery.data;
-
-  if (data === 'test1') {
-    bot.sendMessage(chatId, '🎉 TEST 1 WORKED! Buttons are functioning!');
-    bot.answerCallbackQuery(callbackQuery.id);
+  
+  // Check if admin
+  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
+    bot.answerCallbackQuery(callbackQuery.id, { text: 'Admin only!' });
+    return;
   }
-  else if (data === 'test2') {
-    bot.sendMessage(chatId, '🎉 TEST 2 WORKED! Buttons are functioning!');
-    bot.answerCallbackQuery(callbackQuery.id);
+  
+  if (data.startsWith('approve_')) {
+    const userChatId = data.replace('approve_', '');
+    // Approve user logic here
+    bot.sendMessage(chatId, `✅ User ${userChatId} approved!`);
+    bot.sendMessage(userChatId, '🎉 Your registration has been approved!');
+  } else if (data.startsWith('reject_')) {
+    const userChatId = data.replace('reject_', '');
+    // Reject user logic here
+    bot.sendMessage(chatId, `❌ User ${userChatId} rejected!`);
+    bot.sendMessage(userChatId, '❌ Your registration has been rejected. Contact admin for details.');
   }
+  
+  bot.answerCallbackQuery(callbackQuery.id);
 });
 
-console.log('✅ Bot fully loaded and ready!');
+console.log('✅ Telegram Registration Bot Started!');
