@@ -1178,6 +1178,133 @@ async function handleAdminApproval(productId, callbackQuery, approve) {
   }
 }
 
+// ========== MISSING ADMIN COMMANDS ========== //
+
+// Admin: Statistics command
+bot.onText(/\/stats|📊 Stats/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  if (!ADMIN_IDS.includes(userId)) return;
+  
+  const totalProducts = products.size;
+  const approvedProducts = Array.from(products.values()).filter(p => p.status === 'approved').length;
+  const pendingProducts = Array.from(products.values()).filter(p => p.status === 'pending').length;
+  const rejectedProducts = Array.from(products.values()).filter(p => p.status === 'rejected').length;
+  const totalUsers = users.size;
+  
+  // Calculate today's submissions
+  const today = new Date();
+  const todayProducts = Array.from(products.values())
+    .filter(p => p.createdAt.toDateString() === today.toDateString()).length;
+  
+  await bot.sendMessage(chatId,
+    `📊 *Marketplace Statistics*\n\n` +
+    `👥 *Total Users:* ${totalUsers}\n` +
+    `🛍️ *Total Products:* ${totalProducts}\n` +
+    `✅ *Approved:* ${approvedProducts}\n` +
+    `⏳ *Pending:* ${pendingProducts}\n` +
+    `❌ *Rejected:* ${rejectedProducts}\n` +
+    `📈 *Today's Submissions:* ${todayProducts}\n\n` +
+    `Last updated: ${new Date().toLocaleString()}`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// Admin: View all users
+bot.onText(/\/users|👥 Users/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  if (!ADMIN_IDS.includes(userId)) return;
+  
+  const userList = Array.from(users.values());
+  
+  if (userList.length === 0) {
+    await bot.sendMessage(chatId, 'No users registered yet.');
+    return;
+  }
+  
+  let message = `👥 *Registered Users (${userList.length})*\n\n`;
+  
+  userList.slice(0, 15).forEach((user, index) => {
+    const userProducts = Array.from(products.values()).filter(p => p.sellerId === user.telegramId).length;
+    
+    message += `${index + 1}. ${user.firstName} (@${user.username || 'No username'})\n`;
+    message += `   🆔 ${user.telegramId}\n`;
+    message += `   🛍️ Products: ${userProducts}\n`;
+    message += `   📅 Joined: ${user.joinedAt.toLocaleDateString()}\n\n`;
+  });
+  
+  if (userList.length > 15) {
+    message += `... and ${userList.length - 15} more users.`;
+  }
+  
+  await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+});
+
+// Admin: View all products
+bot.onText(/\/allproducts|🛍️ All Products/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  if (!ADMIN_IDS.includes(userId)) return;
+  
+  const allProducts = Array.from(products.values());
+  
+  if (allProducts.length === 0) {
+    await bot.sendMessage(chatId, 'No products in the system.');
+    return;
+  }
+  
+  let message = `🛍️ *All Products (${allProducts.length})*\n\n`;
+  
+  allProducts.forEach((product, index) => {
+    const seller = users.get(product.sellerId);
+    const statusIcon = product.status === 'approved' ? '✅' : product.status === 'pending' ? '⏳' : '❌';
+    
+    message += `${index + 1}. ${statusIcon} *${product.title}*\n`;
+    message += `   💰 ${product.price} ETB | ${product.category}\n`;
+    message += `   👤 ${seller?.firstName || 'Unknown'}\n`;
+    message += `   🏷️ ${product.status} | 📅 ${product.createdAt.toLocaleDateString()}\n\n`;
+  });
+  
+  await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+});
+
+// Cancel command for admin actions
+bot.onText(/\/cancel/, (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  if (userStates.has(userId)) {
+    userStates.delete(userId);
+    bot.sendMessage(chatId, '❌ Action cancelled.');
+  }
+});
+
+// Test all admin features
+bot.onText(/\/testadmin/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  if (!ADMIN_IDS.includes(userId)) return;
+  
+  await bot.sendMessage(chatId,
+    `🧪 *Admin System Test*\n\n` +
+    `Testing all admin features:\n\n` +
+    `✅ Instant notifications\n` +
+    `✅ Approve/Reject buttons\n` +
+    `✅ Message individual users\n` +
+    `✅ Broadcast to all\n` +
+    `✅ View statistics\n` +
+    `✅ View all users\n` +
+    `✅ View all products\n\n` +
+    `All admin features should work! 🎉`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
 // ========== HELP & CONTACT ========== //
 
 // ========== HELP COMMAND ========== //
