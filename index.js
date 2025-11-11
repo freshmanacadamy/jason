@@ -202,8 +202,16 @@ bot.onText(/\/browse|🛍️ Browse Products/, async (msg) => {
   const chatId = msg.chat.id;
   
   try {
-    if (products.size === 0) {
-      bot.sendMessage(chatId, 
+    // Count approved products
+    let approvedProducts = [];
+    products.forEach((product, id) => {
+      if (product.status === 'approved') {
+        approvedProducts.push({...product, id});
+      }
+    });
+
+    if (approvedProducts.length === 0) {
+      await bot.sendMessage(chatId, 
         `🛍️ *Browse Products*\n\n` +
         `No products available yet.\n\n` +
         `Be the first to list something! Use "➕ Add Product"`,
@@ -212,45 +220,58 @@ bot.onText(/\/browse|🛍️ Browse Products/, async (msg) => {
       return;
     }
 
-    let approvedProducts = 0;
-    
-    // Send each product as separate message with image
-    products.forEach((product, id) => {
-      if (product.status === 'approved') {
-        approvedProducts++;
-        const keyboard = {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '🛒 BUY NOW', callback_data: `buy_${id}` },
-                { text: '📞 CONTACT SELLER', callback_data: `contact_${id}` }
-              ]
-            ]
-          }
-        };
+    // Send summary first
+    await bot.sendMessage(chatId, 
+      `🛍️ *Browse Products*\n\n` +
+      `Found ${approvedProducts.length} product(s) available:\n\n` +
+      `Scroll down to see all items with photos 👇`,
+      { parse_mode: 'Markdown' }
+    );
 
-        bot.sendPhoto(chatId, product.image, {
-          caption: `🏷️ *${product.title}*\n💰 ${product.price} ETB\n👤 @${product.sellerUsername}`,
+    // Send each product with a small delay to avoid rate limits
+    for (let i = 0; i < approvedProducts.length; i++) {
+      const product = approvedProducts[i];
+      
+      const keyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🛒 BUY NOW', callback_data: `buy_${product.id}` },
+              { text: '📞 CONTACT', callback_data: `contact_${product.id}` }
+            ]
+          ]
+        }
+      };
+
+      try {
+        await bot.sendPhoto(chatId, product.image, {
+          caption: `🏷️ *${product.title}*\n\n💰 *Price:* ${product.price} ETB\n👤 *Seller:* @${product.sellerUsername}\n\n📍 *Campus Pickup*`,
           parse_mode: 'Markdown',
           reply_markup: keyboard.reply_markup
         });
+        
+        // Add small delay between messages to avoid flooding
+        if (i < approvedProducts.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (photoError) {
+        // If photo fails, send text version
+        console.error('Error sending photo:', photoError);
+        await bot.sendMessage(chatId,
+          `🏷️ *${product.title}*\n\n💰 *Price:* ${product.price} ETB\n👤 *Seller:* @${product.sellerUsername}\n\n📍 *Campus Pickup*`,
+          { parse_mode: 'Markdown', reply_markup: keyboard.reply_markup }
+        );
       }
-    });
-
-    if (approvedProducts === 0) {
-      bot.sendMessage(chatId, 
-        `🛍️ *Browse Products*\n\n` +
-        `No active products available at the moment.`,
-        { parse_mode: 'Markdown' }
-      );
     }
-    
+
   } catch (error) {
     console.error('Error browsing products:', error);
-    bot.sendMessage(chatId, '❌ An error occurred while loading products.');
+    await bot.sendMessage(chatId, 
+      '❌ Error loading products. Please try again in a moment.',
+      { parse_mode: 'Markdown' }
+    );
   }
 });
-
 // ========== CALLBACK QUERIES ========== //
 bot.on('callback_query', async (callbackQuery) => {
   const message = callbackQuery.message;
