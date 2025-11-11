@@ -1,7 +1,7 @@
 {
-  "name": "telegram-bot-buttons",
+  "name": "jimma-marketplace-bot",
   "version": "1.0.0",
-  "description": "Telegram bot with interactive buttons hosted on Render",
+  "description": "Jimma University Student Marketplace Bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -9,15 +9,11 @@
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "mongoose": "^7.5.0",
+    "dotenv": "^16.3.1"
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "keywords": [
-    "telegram",
-    "bot",
-    "buttons",
-    "render"
-  ]
+  }
 }
