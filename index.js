@@ -6,16 +6,13 @@ const app = express();
 app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
+const CHANNEL_ID = process.env.CHANNEL_ID; // @jumarket
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(Number) : [];
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// Store user images and states
-const userImages = new Map();
-const userStates = new Map();
-
 app.get('/', (req, res) => {
-  res.send('🤖 Image Gallery Bot with Channel Posting!');
+  res.send('🤖 Jimma University Marketplace Bot is alive!');
 });
 
 const PORT = process.env.PORT || 3000;
@@ -23,680 +20,734 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-console.log('✅ Bot started successfully!');
+console.log('✅ JU Marketplace Bot started!');
+
+// ========== DATABASE (In-Memory) ========== //
+const users = new Map();
+const products = new Map();
+const userStates = new Map();
+let productIdCounter = 1;
+
+// Categories for Jimma University
+const CATEGORIES = [
+  '📚 Academic Books',
+  '💻 Electronics', 
+  '👕 Clothes & Fashion',
+  '🏠 Furniture & Home',
+  '📝 Study Materials',
+  '🎮 Entertainment',
+  '🍔 Food & Drinks',
+  '🚗 Transportation',
+  '🎒 Accessories',
+  '❓ Others'
+];
 
 // ========== MAIN MENU ========== //
 const showMainMenu = (chatId) => {
   const options = {
     reply_markup: {
       keyboard: [
-        [{ text: '📸 Upload Image' }, { text: '🖼️ My Gallery' }],
-        [{ text: '📢 Post to Channel' }, { text: 'ℹ️ Help' }]
+        [{ text: '🛍️ Browse Products' }, { text: '➕ Sell Item' }],
+        [{ text: '📋 My Products' }, { text: '📞 Contact Admin' }],
+        [{ text: 'ℹ️ Help' }]
       ],
-      resize_keyboard: true,
-      one_time_keyboard: false
+      resize_keyboard: true
     }
   };
   
   bot.sendMessage(chatId, 
-    `🖼️ *Image Gallery Bot*\n\n` +
+    `🏪 *Jimma University Marketplace*\n\n` +
+    `Welcome to JU Student Marketplace! 🎓\n\n` +
     `Choose an option below:`,
     { parse_mode: 'Markdown', ...options }
   );
 };
 
 // ========== START COMMAND ========== //
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  const username = msg.from.username;
   
-  // Initialize user storage
-  if (!userImages.has(userId)) {
-    userImages.set(userId, []);
+  // Register user
+  if (!users.has(userId)) {
+    users.set(userId, {
+      telegramId: userId,
+      username: username,
+      firstName: msg.from.first_name,
+      joinedAt: new Date(),
+      department: '',
+      year: ''
+    });
   }
   
-  bot.sendMessage(chatId, 
-    `👋 *Welcome to Image Gallery Bot!*\n\n` +
-    `📸 *Upload Image* - Add photos to your gallery\n` +
-    `🖼️ *My Gallery* - View your uploaded images\n` +
-    `📢 *Post to Channel* - Share images to channel\n\n` +
-    `All buttons are working! Try them out! 🎉`,
+  await bot.sendMessage(chatId, 
+    `🎓 *Welcome to Jimma University Marketplace!*\n\n` +
+    `🏪 *Buy & Sell* within JU Community\n` +
+    `📚 Books, Electronics, Clothes & more\n` +
+    `🔒 Safe campus transactions\n` +
+    `📢 All products posted in @jumarket\n\n` +
+    `Start by browsing items or selling yours!`,
     { parse_mode: 'Markdown' }
   );
   
   showMainMenu(chatId);
 });
 
-// ========== UPLOAD IMAGE BUTTON ========== //
-bot.onText(/\/upload|📸 Upload Image/, (msg) => {
+// ========== BROWSE PRODUCTS ========== //
+bot.onText(/\/browse|🛍️ Browse Products/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  const approvedProducts = Array.from(products.values())
+    .filter(product => product.status === 'approved')
+    .slice(0, 10); // Show latest 10
+  
+  if (approvedProducts.length === 0) {
+    await bot.sendMessage(chatId,
+      `🛍️ *Browse Products*\n\n` +
+      `No products available yet.\n\n` +
+      `Be the first to list an item! 💫\n` +
+      `Use "➕ Sell Item" to get started.`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  
+  await bot.sendMessage(chatId,
+    `🛍️ *Available Products (${approvedProducts.length})*\n\n` +
+    `Latest items from JU students:`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  // Send each product
+  for (const product of approvedProducts) {
+    const seller = users.get(product.sellerId);
+    
+    const browseKeyboard = {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '🛒 Buy Now', callback_data: `buy_${product.id}` },
+            { text: '📞 Contact Seller', callback_data: `contact_${product.id}` }
+          ],
+          [
+            { text: '👀 View Details', callback_data: `details_${product.id}` }
+          ]
+        ]
+      }
+    };
+    
+    try {
+      await bot.sendPhoto(chatId, product.images[0], {
+        caption: `🏷️ *${product.title}*\n\n` +
+                 `💰 *Price:* ${product.price} ETB\n` +
+                 `📦 *Category:* ${product.category}\n` +
+                 `👤 *Seller:* ${seller?.firstName || 'JU Student'}\n` +
+                 `${product.description ? `📝 *Description:* ${product.description}\n` : ''}` +
+                 `\n📍 *Campus Meetup*`,
+        parse_mode: 'Markdown',
+        reply_markup: browseKeyboard.reply_markup
+      });
+    } catch (error) {
+      // Fallback to text if image fails
+      await bot.sendMessage(chatId,
+        `🏷️ *${product.title}*\n\n` +
+        `💰 *Price:* ${product.price} ETB\n` +
+        `📦 *Category:* ${product.category}\n` +
+        `👤 *Seller:* ${seller?.firstName || 'JU Student'}\n` +
+        `${product.description ? `📝 *Description:* ${product.description}\n` : ''}`,
+        { parse_mode: 'Markdown', reply_markup: browseKeyboard.reply_markup }
+      );
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+});
+
+// ========== SELL ITEM ========== //
+bot.onText(/\/sell|➕ Sell Item/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   
-  if (!userImages.has(userId)) {
-    userImages.set(userId, []);
-  }
+  userStates.set(userId, {
+    state: 'awaiting_product_images',
+    productData: {}
+  });
   
-  bot.sendMessage(chatId, 
-    `📸 *Upload Image*\n\n` +
-    `Send me a photo to add to your gallery!\n\n` +
-    `I'll save it and you can view it later or post to channel.`,
+  await bot.sendMessage(chatId,
+    `🛍️ *Sell Your Item - Step 1/5*\n\n` +
+    `📸 *Send Product Photos*\n\n` +
+    `Please send 1-5 photos of your item.\n` +
+    `You can send multiple images at once.`,
     { parse_mode: 'Markdown' }
   );
 });
 
-// ========== HANDLE PHOTO UPLOADS ========== //
+// Handle product photo uploads
 bot.on('photo', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  const photo = msg.photo[msg.photo.length - 1];
-  
-  if (!userImages.has(userId)) {
-    userImages.set(userId, []);
-  }
-  
-  const userImageList = userImages.get(userId);
-  
-  // Save image data
-  const imageData = {
-    fileId: photo.file_id,
-    timestamp: new Date(),
-    fileSize: photo.file_size,
-    caption: ''
-  };
-  
-  userImageList.push(imageData);
-  const imageIndex = userImageList.length - 1;
-  
-  // Success message with action buttons
-  const actionKeyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: '📢 Post to Channel', callback_data: `post_${imageIndex}` },
-          { text: '✏️ Add Caption', callback_data: `add_caption_${imageIndex}` }
-        ],
-        [
-          { text: '🖼️ View Gallery', callback_data: 'view_gallery' },
-          { text: '📸 Upload More', callback_data: 'upload_more' }
-        ]
-      ]
-    }
-  };
-  
-  await bot.sendMessage(chatId,
-    `✅ *Image Uploaded Successfully!*\n\n` +
-    `🖼️ Saved as image #${userImageList.length} in your gallery\n` +
-    `💾 Size: ${(photo.file_size / 1024).toFixed(1)} KB\n\n` +
-    `What would you like to do next?`,
-    { parse_mode: 'Markdown', ...actionKeyboard }
-  );
-});
-
-// ========== MY GALLERY BUTTON ========== //
-bot.onText(/\/gallery|🖼️ My Gallery/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  
-  const userImageList = userImages.get(userId) || [];
-  
-  if (userImageList.length === 0) {
-    await bot.sendMessage(chatId,
-      `🖼️ *My Gallery*\n\n` +
-      `Your gallery is empty!\n\n` +
-      `Click "📸 Upload Image" to add your first photo.`,
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-  
-  // Send gallery summary
-  await bot.sendMessage(chatId,
-    `🖼️ *My Gallery*\n\n` +
-    `You have ${userImageList.length} image(s) in your gallery.\n\n` +
-    `Scroll down to view all images 👇`,
-    { parse_mode: 'Markdown' }
-  );
-  
-  // Send each image with controls
-  for (let i = 0; i < userImageList.length; i++) {
-    const image = userImageList[i];
-    
-    const galleryKeyboard = {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: `🖼️ ${i + 1}/${userImageList.length}`, callback_data: 'image_info' },
-            { text: '📢 Post', callback_data: `gallery_post_${i}` }
-          ],
-          [
-            { text: '✏️ Caption', callback_data: `gallery_caption_${i}` },
-            { text: '🗑️ Delete', callback_data: `gallery_delete_${i}` }
-          ],
-          [
-            { text: '⬅️ Prev', callback_data: `gallery_prev_${i}` },
-            { text: 'Next ➡️', callback_data: `gallery_next_${i}` }
-          ]
-        ]
-      }
-    };
-    
-    const caption = image.caption 
-      ? `📝 ${image.caption}\n\n🖼️ Image ${i + 1}/${userImageList.length}`
-      : `🖼️ Image ${i + 1}/${userImageList.length}\n\nTap "✏️ Caption" to add text`;
-    
-    await bot.sendPhoto(chatId, image.fileId, {
-      caption: caption,
-      parse_mode: 'Markdown',
-      reply_markup: galleryKeyboard.reply_markup
-    });
-    
-    // Small delay to avoid flooding
-    if (i < userImageList.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 300));
-    }
-  }
-});
-
-// ========== POST TO CHANNEL BUTTON ========== //
-bot.onText(/\/post|📢 Post to Channel/, async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  
-  const userImageList = userImages.get(userId) || [];
-  
-  if (userImageList.length === 0) {
-    await bot.sendMessage(chatId,
-      `📢 *Post to Channel*\n\n` +
-      `No images to post!\n\n` +
-      `Upload some images first using "📸 Upload Image"`,
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
-  
-  // Create channel post menu
-  const channelKeyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        // Add each image as an option
-        ...userImageList.map((image, index) => [
-          { 
-            text: `🖼️ Image ${index + 1} ${image.caption ? '📝' : ''}`, 
-            callback_data: `channel_select_${index}` 
-          }
-        ]),
-        [
-          { text: '📢 Post All to Channel', callback_data: 'post_all' },
-          { text: '🔄 Refresh', callback_data: 'refresh_channel' }
-        ],
-        [
-          { text: '📸 Upload More', callback_data: 'upload_from_channel' }
-        ]
-      ]
-    }
-  };
-  
-  await bot.sendMessage(chatId,
-    `📢 *Post to Channel*\n\n` +
-    `Select an image to post to channel:\n\n` +
-    `🖼️ - Image\n` +
-    `📝 - Image with caption\n\n` +
-    `Or post all images at once!`,
-    { parse_mode: 'Markdown', ...channelKeyboard }
-  );
-});
-
-// ========== HELP BUTTON ========== //
-bot.onText(/\/help|ℹ️ Help/, (msg) => {
-  const chatId = msg.chat.id;
-  
-  bot.sendMessage(chatId,
-    `ℹ️ *Image Gallery Bot Help*\n\n` +
-    `*How to Use:*\n` +
-    `📸 *Upload Image* - Send photos to save in gallery\n` +
-    `🖼️ *My Gallery* - View and manage your images\n` +
-    `📢 *Post to Channel* - Share images to channel\n\n` +
-    `*Features:*\n` +
-    `• Add captions to images\n` +
-    `• Delete images from gallery\n` +
-    `• Navigate through images\n` +
-    `• Post single or all images\n\n` +
-    `*All buttons are tested and working!* 🎉`,
-    { parse_mode: 'Markdown' }
-  );
-});
-
-// ========== CALLBACK QUERY HANDLER ========== //
-bot.on('callback_query', async (callbackQuery) => {
-  const message = callbackQuery.message;
-  const chatId = message.chat.id;
-  const userId = callbackQuery.from.id;
-  const data = callbackQuery.data;
-  
-  const userImageList = userImages.get(userId) || [];
-  
-  try {
-    console.log(`🔘 Button clicked: ${data}`);
-
-    // === UPLOAD ACTIONS ===
-    if (data === 'upload_more') {
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: '📸 Send another photo!'
-      });
-      return;
-    }
-
-    if (data === 'view_gallery') {
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: '🖼️ Opening your gallery...'
-      });
-      // Trigger gallery view
-      bot.onText(/🖼️ My Gallery/, { chat: { id: chatId }, from: { id: userId } });
-      return;
-    }
-
-    // === POST ACTIONS ===
-    if (data.startsWith('post_')) {
-      const index = parseInt(data.replace('post_', ''));
-      await postImageToChannel(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    if (data.startsWith('gallery_post_')) {
-      const index = parseInt(data.replace('gallery_post_', ''));
-      await postImageToChannel(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    if (data.startsWith('channel_select_')) {
-      const index = parseInt(data.replace('channel_select_', ''));
-      const image = userImageList[index];
-      
-      const confirmKeyboard = {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Post Now', callback_data: `confirm_post_${index}` },
-              { text: '✏️ Add Caption', callback_data: `channel_caption_${index}` }
-            ],
-            [
-              { text: '❌ Cancel', callback_data: 'cancel_post' }
-            ]
-          ]
-        }
-      };
-
-      await bot.editMessageText(
-        `📢 *Post Image ${index + 1} to Channel?*\n\n` +
-        `Caption: ${image.caption || 'No caption'}\n\n` +
-        `Confirm to post this image:`,
-        {
-          chat_id: chatId,
-          message_id: message.message_id,
-          parse_mode: 'Markdown',
-          reply_markup: confirmKeyboard.reply_markup
-        }
-      );
-
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: 'Confirm channel post'
-      });
-      return;
-    }
-
-    if (data.startsWith('confirm_post_')) {
-      const index = parseInt(data.replace('confirm_post_', ''));
-      await postImageToChannel(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    if (data === 'post_all') {
-      await postAllImagesToChannel(chatId, userId, callbackQuery.id);
-      return;
-    }
-
-    if (data === 'refresh_channel') {
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: '🔄 Refreshing...'
-      });
-      // Re-trigger channel post menu
-      bot.onText(/📢 Post to Channel/, { chat: { id: chatId }, from: { id: userId } });
-      return;
-    }
-
-    if (data === 'upload_from_channel') {
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: '📸 Send a photo to upload!'
-      });
-      return;
-    }
-
-    // === CAPTION ACTIONS ===
-    if (data.startsWith('add_caption_')) {
-      const index = parseInt(data.replace('add_caption_', ''));
-      await startCaptionProcess(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    if (data.startsWith('gallery_caption_')) {
-      const index = parseInt(data.replace('gallery_caption_', ''));
-      await startCaptionProcess(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    if (data.startsWith('channel_caption_')) {
-      const index = parseInt(data.replace('channel_caption_', ''));
-      await startCaptionProcess(chatId, userId, index, callbackQuery.id);
-      return;
-    }
-
-    // === GALLERY NAVIGATION ===
-    if (data.startsWith('gallery_prev_')) {
-      const currentIndex = parseInt(data.replace('gallery_prev_', ''));
-      await navigateGallery(chatId, userId, currentIndex, 'prev', callbackQuery.id);
-      return;
-    }
-
-    if (data.startsWith('gallery_next_')) {
-      const currentIndex = parseInt(data.replace('gallery_next_', ''));
-      await navigateGallery(chatId, userId, currentIndex, 'next', callbackQuery.id);
-      return;
-    }
-
-    // === DELETE ACTIONS ===
-    if (data.startsWith('gallery_delete_')) {
-      const index = parseInt(data.replace('gallery_delete_', ''));
-      await deleteImage(chatId, userId, index, message.message_id, callbackQuery.id);
-      return;
-    }
-
-    // === CANCEL ACTIONS ===
-    if (data === 'cancel_post') {
-      await bot.editMessageText(
-        `❌ *Post Cancelled*\n\n` +
-        `Image posting was cancelled.\n\n` +
-        `You can try again from the main menu.`,
-        {
-          chat_id: chatId,
-          message_id: message.message_id,
-          parse_mode: 'Markdown'
-        }
-      );
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: 'Post cancelled'
-      });
-      return;
-    }
-
-    // === INFO ACTIONS ===
-    if (data === 'image_info') {
-      await bot.answerCallbackQuery(callbackQuery.id, {
-        text: `You have ${userImageList.length} images`
-      });
-      return;
-    }
-
-    // Unknown callback
-    await bot.answerCallbackQuery(callbackQuery.id, {
-      text: '❌ Unknown button action'
-    });
-
-  } catch (error) {
-    console.error('Callback error:', error);
-    await bot.answerCallbackQuery(callbackQuery.id, {
-      text: '❌ Error processing request'
-    });
-  }
-});
-
-// ========== HELPER FUNCTIONS ========== //
-
-// Post single image to channel
-async function postImageToChannel(chatId, userId, index, callbackQueryId) {
-  const userImageList = userImages.get(userId) || [];
-  const image = userImageList[index];
-  
-  if (!image) {
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '❌ Image not found'
-    });
-    return;
-  }
-  
-  try {
-    await bot.sendPhoto(CHANNEL_ID, image.fileId, {
-      caption: image.caption || `📸 Shared via Image Gallery Bot\n👤 From: User`
-    });
-    
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '✅ Posted to channel!'
-    });
-    
-    await bot.sendMessage(chatId,
-      `📢 *Successfully Posted!*\n\n` +
-      `Image #${index + 1} has been shared in the channel! 🎉`,
-      { parse_mode: 'Markdown' }
-    );
-    
-  } catch (error) {
-    console.error('Channel post error:', error);
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '❌ Failed to post to channel'
-    });
-    
-    await bot.sendMessage(chatId,
-      `❌ *Failed to Post*\n\n` +
-      `Make sure:\n` +
-      `• Bot is admin in channel\n` +
-      `• Channel exists\n` +
-      `• Try again later`,
-      { parse_mode: 'Markdown' }
-    );
-  }
-}
-
-// Post all images to channel
-async function postAllImagesToChannel(chatId, userId, callbackQueryId) {
-  const userImageList = userImages.get(userId) || [];
-  
-  if (userImageList.length === 0) {
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '❌ No images to post'
-    });
-    return;
-  }
-  
-  let postedCount = 0;
-  
-  for (let i = 0; i < userImageList.length; i++) {
-    const image = userImageList[i];
-    try {
-      await bot.sendPhoto(CHANNEL_ID, image.fileId, {
-        caption: image.caption || `📸 Image ${i + 1} shared via bot`
-      });
-      postedCount++;
-      
-      // Delay between posts
-      if (i < userImageList.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    } catch (error) {
-      console.error(`Failed to post image ${i + 1}:`, error);
-    }
-  }
-  
-  await bot.answerCallbackQuery(callbackQueryId, {
-    text: `✅ Posted ${postedCount} images!`
-  });
-  
-  await bot.sendMessage(chatId,
-    `📢 *Bulk Post Complete!*\n\n` +
-    `Successfully posted ${postedCount}/${userImageList.length} images to channel! 🎉`,
-    { parse_mode: 'Markdown' }
-  );
-}
-
-// Start caption process
-async function startCaptionProcess(chatId, userId, index, callbackQueryId) {
-  userStates.set(userId, { action: 'adding_caption', imageIndex: index });
-  
-  await bot.sendMessage(chatId,
-    `✏️ *Add Caption*\n\n` +
-    `Please send the caption text for this image.\n\n` +
-    `Type /cancel to skip.`,
-    { parse_mode: 'Markdown' }
-  );
-  
-  await bot.answerCallbackQuery(callbackQueryId, {
-    text: '📝 Enter caption text'
-  });
-}
-
-// Navigate gallery
-async function navigateGallery(chatId, userId, currentIndex, direction, callbackQueryId) {
-  const userImageList = userImages.get(userId) || [];
-  
-  let newIndex;
-  if (direction === 'prev') {
-    newIndex = currentIndex > 0 ? currentIndex - 1 : userImageList.length - 1;
-  } else {
-    newIndex = currentIndex < userImageList.length - 1 ? currentIndex + 1 : 0;
-  }
-  
-  const image = userImageList[newIndex];
-  
-  if (image) {
-    const galleryKeyboard = {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: `🖼️ ${newIndex + 1}/${userImageList.length}`, callback_data: 'image_info' },
-            { text: '📢 Post', callback_data: `gallery_post_${newIndex}` }
-          ],
-          [
-            { text: '✏️ Caption', callback_data: `gallery_caption_${newIndex}` },
-            { text: '🗑️ Delete', callback_data: `gallery_delete_${newIndex}` }
-          ],
-          [
-            { text: '⬅️ Prev', callback_data: `gallery_prev_${newIndex}` },
-            { text: 'Next ➡️', callback_data: `gallery_next_${newIndex}` }
-          ]
-        ]
-      }
-    };
-    
-    const caption = image.caption 
-      ? `📝 ${image.caption}\n\n🖼️ Image ${newIndex + 1}/${userImageList.length}`
-      : `🖼️ Image ${newIndex + 1}/${userImageList.length}\n\nTap "✏️ Caption" to add text`;
-    
-    await bot.editMessageMedia(
-      {
-        type: 'photo',
-        media: image.fileId,
-        caption: caption,
-        parse_mode: 'Markdown'
-      },
-      {
-        chat_id: chatId,
-        message_id: message.message_id,
-        reply_markup: galleryKeyboard.reply_markup
-      }
-    );
-    
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: `Image ${newIndex + 1}/${userImageList.length}`
-    });
-  }
-}
-
-// Delete image
-async function deleteImage(chatId, userId, index, messageId, callbackQueryId) {
-  const userImageList = userImages.get(userId) || [];
-  
-  if (userImageList[index]) {
-    userImageList.splice(index, 1);
-    
-    await bot.editMessageCaption('🗑️ *Image Deleted*\n\nThis image has been removed from your gallery.', {
-      chat_id: chatId,
-      message_id: messageId,
-      parse_mode: 'Markdown'
-    });
-    
-    await bot.answerCallbackQuery(callbackQueryId, {
-      text: '✅ Image deleted'
-    });
-  }
-}
-
-// ========== HANDLE CAPTION TEXT INPUT ========== //
-bot.on('message', async (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const text = msg.text;
-  
-  if (!text || text.startsWith('/')) return;
-  
   const userState = userStates.get(userId);
   
-  if (userState && userState.action === 'adding_caption') {
-    const userImageList = userImages.get(userId) || [];
-    const imageIndex = userState.imageIndex;
+  if (userState && userState.state === 'awaiting_product_images') {
+    const photo = msg.photo[msg.photo.length - 1];
     
-    if (userImageList[imageIndex]) {
-      // Save caption
-      userImageList[imageIndex].caption = text;
-      userStates.delete(userId);
+    if (!userState.productData.images) {
+      userState.productData.images = [];
+    }
+    
+    userState.productData.images.push(photo.file_id);
+    userStates.set(userId, userState);
+    
+    // If first image, ask for more or continue
+    if (userState.productData.images.length === 1) {
+      await bot.sendMessage(chatId,
+        `✅ *First photo received!*\n\n` +
+        `You can send more photos (max 5) or type 'next' to continue.`,
+        { parse_mode: 'Markdown' }
+      );
+    } else if (userState.productData.images.length >= 5) {
+      userState.state = 'awaiting_product_title';
+      userStates.set(userId, userState);
       
       await bot.sendMessage(chatId,
-        `✅ *Caption Added!*\n\n` +
-        `"${text}"\n\n` +
-        `Caption saved for this image. You can post it to channel now!`,
+        `📸 *Photos uploaded (${userState.productData.images.length})*\n\n` +
+        `🏷️ *Step 2/5 - Product Title*\n\n` +
+        `Enter a clear title for your item:\n\n` +
+        `Examples:\n` +
+        `• "Calculus Textbook 3rd Edition"\n` +
+        `• "iPhone 12 - 128GB - Like New"\n` +
+        `• "Engineering Calculator FX-991ES"`,
         { parse_mode: 'Markdown' }
       );
     }
   }
 });
 
-// Cancel command
-bot.onText(/\/cancel/, (msg) => {
+// Handle text messages for product creation
+bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  const text = msg.text;
+  const userState = userStates.get(userId);
   
-  if (userStates.has(userId)) {
-    userStates.delete(userId);
-    bot.sendMessage(chatId, '❌ Action cancelled.');
+  if (!text || text.startsWith('/')) return;
+  
+  if (userState) {
+    try {
+      switch (userState.state) {
+        case 'awaiting_product_images':
+          if (text.toLowerCase() === 'next' && userState.productData.images && userState.productData.images.length > 0) {
+            userState.state = 'awaiting_product_title';
+            userStates.set(userId, userState);
+            
+            await bot.sendMessage(chatId,
+              `🏷️ *Step 2/5 - Product Title*\n\n` +
+              `Enter a clear title for your item:`,
+              { parse_mode: 'Markdown' }
+            );
+          }
+          break;
+          
+        case 'awaiting_product_title':
+          userState.productData.title = text;
+          userState.state = 'awaiting_product_price';
+          userStates.set(userId, userState);
+          
+          await bot.sendMessage(chatId,
+            `💰 *Step 3/5 - Product Price*\n\n` +
+            `Enter the price in ETB:\n\n` +
+            `Example: 1500`,
+            { parse_mode: 'Markdown' }
+          );
+          break;
+          
+        case 'awaiting_product_price':
+          if (!isNaN(text) && parseInt(text) > 0) {
+            userState.productData.price = parseInt(text);
+            userState.state = 'awaiting_product_description';
+            userStates.set(userId, userState);
+            
+            await bot.sendMessage(chatId,
+              `📝 *Step 4/5 - Product Description*\n\n` +
+              `Add a description (optional):\n\n` +
+              `• Condition (New/Used)\n` +
+              `• Features\n` +
+              `• Reason for selling\n\n` +
+              `Type /skip to skip description`,
+              { parse_mode: 'Markdown' }
+            );
+          } else {
+            await bot.sendMessage(chatId, '❌ Please enter a valid price (numbers only).');
+          }
+          break;
+          
+        case 'awaiting_product_description':
+          if (text === '/skip') {
+            userState.productData.description = '';
+            await selectProductCategory(chatId, userId, userState);
+          } else {
+            userState.productData.description = text;
+            await selectProductCategory(chatId, userId, userState);
+          }
+          break;
+      }
+    } catch (error) {
+      console.error('Product creation error:', error);
+      await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
+    }
   }
 });
 
-// Test command to check button functionality
-bot.onText(/\/testbuttons/, (msg) => {
-  const chatId = msg.chat.id;
-  
-  const testKeyboard = {
+// Category selection
+async function selectProductCategory(chatId, userId, userState) {
+  const categoryKeyboard = {
     reply_markup: {
       inline_keyboard: [
+        ...CATEGORIES.map(category => [
+          { text: category, callback_data: `category_${category}` }
+        ]),
         [
-          { text: '📸 Upload', callback_data: 'upload_more' },
-          { text: '🖼️ Gallery', callback_data: 'view_gallery' }
-        ],
-        [
-          { text: '📢 Post', callback_data: 'channel_select_0' },
-          { text: '✏️ Caption', callback_data: 'add_caption_0' }
-        ],
-        [
-          { text: '⬅️ Prev', callback_data: 'gallery_prev_0' },
-          { text: 'Next ➡️', callback_data: 'gallery_next_0' }
+          { text: '🚫 Cancel', callback_data: 'cancel_product' }
         ]
       ]
     }
   };
   
-  bot.sendMessage(chatId,
-    `🧪 *Button Test Panel*\n\n` +
-    `All buttons are functional!\n\n` +
-    `Try clicking them to see the responses:`,
-    { parse_mode: 'Markdown', ...testKeyboard }
+  userState.state = 'awaiting_product_category';
+  userStates.set(userId, userState);
+  
+  await bot.sendMessage(chatId,
+    `📂 *Step 5/5 - Select Category*\n\n` +
+    `Choose the category that best fits your item:`,
+    { parse_mode: 'Markdown', ...categoryKeyboard }
+  );
+}
+
+// ========== MY PRODUCTS ========== //
+bot.onText(/\/myproducts|📋 My Products/, async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  
+  const userProducts = Array.from(products.values())
+    .filter(product => product.sellerId === userId);
+  
+  if (userProducts.length === 0) {
+    await bot.sendMessage(chatId,
+      `📋 *My Products*\n\n` +
+      `You haven't listed any products yet.\n\n` +
+      `Start selling with "➕ Sell Item"! 💫`,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+  
+  let message = `📋 *Your Products (${userProducts.length})*\n\n`;
+  
+  userProducts.forEach((product, index) => {
+    const statusIcon = 
+      product.status === 'approved' ? '✅' :
+      product.status === 'pending' ? '⏳' :
+      product.status === 'sold' ? '💰' : '❌';
+    
+    message += `${index + 1}. ${statusIcon} *${product.title}*\n`;
+    message += `   💰 ${product.price} ETB | ${product.category}\n`;
+    message += `   🏷️ ${product.status.charAt(0).toUpperCase() + product.status.slice(1)}\n\n`;
+  });
+  
+  await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+});
+
+// ========== CALLBACK QUERIES ========== //
+bot.on('callback_query', async (callbackQuery) => {
+  const message = callbackQuery.message;
+  const chatId = message.chat.id;
+  const userId = callbackQuery.from.id;
+  const data = callbackQuery.data;
+  
+  try {
+    // Product category selection
+    if (data.startsWith('category_')) {
+      const category = data.replace('category_', '');
+      const userState = userStates.get(userId);
+      
+      if (userState && userState.state === 'awaiting_product_category') {
+        await completeProductCreation(chatId, userId, userState, category, callbackQuery.id);
+      }
+      return;
+    }
+    
+    // Buy product
+    if (data.startsWith('buy_')) {
+      const productId = parseInt(data.replace('buy_', ''));
+      await handleBuyProduct(chatId, userId, productId, callbackQuery.id);
+      return;
+    }
+    
+    // Contact seller
+    if (data.startsWith('contact_')) {
+      const productId = parseInt(data.replace('contact_', ''));
+      await handleContactSeller(chatId, userId, productId, callbackQuery.id);
+      return;
+    }
+    
+    // View details
+    if (data.startsWith('details_')) {
+      const productId = parseInt(data.replace('details_', ''));
+      await handleViewDetails(chatId, productId, callbackQuery.id);
+      return;
+    }
+    
+    // Cancel product creation
+    if (data === 'cancel_product') {
+      userStates.delete(userId);
+      await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Product creation cancelled' });
+      await bot.sendMessage(chatId, 'Product creation cancelled.');
+      return;
+    }
+    
+  } catch (error) {
+    console.error('Callback error:', error);
+    await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Error processing request' });
+  }
+});
+
+// Complete product creation
+async function completeProductCreation(chatId, userId, userState, category, callbackQueryId) {
+  const user = users.get(userId);
+  
+  // Create product
+  const product = {
+    id: productIdCounter++,
+    sellerId: userId,
+    sellerUsername: user.username,
+    title: userState.productData.title,
+    description: userState.productData.description || '',
+    price: userState.productData.price,
+    category: category,
+    images: userState.productData.images,
+    status: 'pending', // Needs admin approval
+    createdAt: new Date(),
+    approvedBy: null
+  };
+  
+  products.set(product.id, product);
+  userStates.delete(userId);
+  
+  // Notify admins
+  for (const adminId of ADMIN_IDS) {
+    try {
+      const approveKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Approve', callback_data: `approve_${product.id}` },
+              { text: '❌ Reject', callback_data: `reject_${product.id}` }
+            ]
+          ]
+        }
+      };
+      
+      await bot.sendMessage(adminId,
+        `🆕 *New Product for Approval*\n\n` +
+        `🏷️ *Title:* ${product.title}\n` +
+        `💰 *Price:* ${product.price} ETB\n` +
+        `📂 *Category:* ${product.category}\n` +
+        `👤 *Seller:* @${product.sellerUsername || 'JU Student'}\n` +
+        `${product.description ? `📝 *Description:* ${product.description}\n` : ''}` +
+        `\nPlease review and approve:`,
+        { parse_mode: 'Markdown', ...approveKeyboard }
+      );
+    } catch (error) {
+      console.error('Error notifying admin:', error);
+    }
+  }
+  
+  await bot.answerCallbackQuery(callbackQueryId, { 
+    text: '✅ Product submitted for admin approval!' 
+  });
+  
+  await bot.sendMessage(chatId,
+    `✅ *Product Submitted Successfully!*\n\n` +
+    `🏷️ *${product.title}*\n` +
+    `💰 ${product.price} ETB | ${product.category}\n\n` +
+    `⏳ *Status:* Waiting for admin approval\n\n` +
+    `Your product will appear in @jumarket after approval.`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  showMainMenu(chatId);
+}
+
+// Handle buy product
+async function handleBuyProduct(chatId, userId, productId, callbackQueryId) {
+  const product = products.get(productId);
+  const buyer = users.get(userId);
+  const seller = users.get(product.sellerId);
+  
+  if (!product || product.status !== 'approved') {
+    await bot.answerCallbackQuery(callbackQueryId, { text: '❌ Product not available' });
+    return;
+  }
+  
+  // Notify buyer
+  await bot.sendMessage(chatId,
+    `🛒 *Purchase Request Sent!*\n\n` +
+    `🏷️ *Product:* ${product.title}\n` +
+    `💰 *Price:* ${product.price} ETB\n` +
+    `👤 *Seller:* ${seller.firstName}\n\n` +
+    `I've notified the seller about your interest!\n\n` +
+    `💬 *Contact Seller:* @${seller.username || 'JU Student'}\n` +
+    `📍 *Meetup:* Arrange campus location\n` +
+    `💵 *Payment:* Cash recommended\n\n` +
+    `The seller will contact you shortly!`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  // Notify seller
+  if (seller.telegramId) {
+    await bot.sendMessage(seller.telegramId,
+      `🎉 *NEW BUYER INTERESTED!*\n\n` +
+      `🏷️ *Your Product:* ${product.title}\n` +
+      `💰 *Price:* ${product.price} ETB\n` +
+      `👤 *Buyer:* ${buyer.firstName} @${buyer.username}\n\n` +
+      `💬 *Contact Buyer:* @${buyer.username}\n\n` +
+      `Please arrange:\n` +
+      `• Campus meetup location\n` +
+      `• Payment method\n` +
+      `• Product handover\n\n` +
+      `Happy selling! 🎓`,
+      { parse_mode: 'Markdown' }
+    );
+  }
+  
+  await bot.answerCallbackQuery(callbackQueryId, { 
+    text: '✅ Seller notified! Check your messages.' 
+  });
+}
+
+// Handle contact seller
+async function handleContactSeller(chatId, userId, productId, callbackQueryId) {
+  const product = products.get(productId);
+  const seller = users.get(product.sellerId);
+  
+  if (!product || product.status !== 'approved') {
+    await bot.answerCallbackQuery(callbackQueryId, { text: '❌ Product not available' });
+    return;
+  }
+  
+  await bot.sendMessage(chatId,
+    `📞 *Seller Contact Information*\n\n` +
+    `👤 *Seller:* ${seller.firstName}\n` +
+    `🏷️ *Product:* ${product.title}\n` +
+    `💰 *Price:* ${product.price} ETB\n\n` +
+    `💬 *Direct Message:* @${seller.username || 'JU Student'}\n\n` +
+    `Send them a message to inquire about the product!\n\n` +
+    `📍 *Campus meetup recommended*`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  await bot.answerCallbackQuery(callbackQueryId, { 
+    text: '✅ Contact info sent' 
+  });
+}
+
+// Handle view details
+async function handleViewDetails(chatId, productId, callbackQueryId) {
+  const product = products.get(productId);
+  
+  if (!product) {
+    await bot.answerCallbackQuery(callbackQueryId, { text: '❌ Product not found' });
+    return;
+  }
+  
+  const seller = users.get(product.sellerId);
+  
+  await bot.sendMessage(chatId,
+    `🔍 *Product Details*\n\n` +
+    `🏷️ *Title:* ${product.title}\n` +
+    `💰 *Price:* ${product.price} ETB\n` +
+    `📂 *Category:* ${product.category}\n` +
+    `👤 *Seller:* ${seller.firstName}\n` +
+    `📅 *Posted:* ${product.createdAt.toLocaleDateString()}\n\n` +
+    `${product.description ? `📝 *Description:*\n${product.description}\n\n` : ''}` +
+    `📍 *Campus transaction recommended*`,
+    { parse_mode: 'Markdown' }
+  );
+  
+  await bot.answerCallbackQuery(callbackQueryId, { 
+    text: '📦 Product details sent' 
+  });
+}
+
+// ========== ADMIN APPROVAL SYSTEM ========== //
+bot.on('callback_query', async (callbackQuery) => {
+  const data = callbackQuery.data;
+  
+  // Admin approval
+  if (data.startsWith('approve_')) {
+    const productId = parseInt(data.replace('approve_', ''));
+    await handleAdminApproval(productId, callbackQuery, true);
+    return;
+  }
+  
+  // Admin rejection
+  if (data.startsWith('reject_')) {
+    const productId = parseInt(data.replace('reject_', ''));
+    await handleAdminApproval(productId, callbackQuery, false);
+    return;
+  }
+});
+
+async function handleAdminApproval(productId, callbackQuery, approve) {
+  const adminId = callbackQuery.from.id;
+  const product = products.get(productId);
+  
+  if (!ADMIN_IDS.includes(adminId)) {
+    await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Admin access required' });
+    return;
+  }
+  
+  if (!product) {
+    await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Product not found' });
+    return;
+  }
+  
+  if (approve) {
+    // Approve product
+    product.status = 'approved';
+    product.approvedBy = adminId;
+    
+    // Post to channel
+    try {
+      const seller = users.get(product.sellerId);
+      
+      const channelKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🛒 BUY NOW', callback_data: `buy_${product.id}` },
+              { text: '📞 CONTACT SELLER', callback_data: `contact_${product.id}` }
+            ]
+          ]
+        }
+      };
+      
+      await bot.sendPhoto(CHANNEL_ID, product.images[0], {
+        caption: `🏷️ *${product.title}*\n\n` +
+                 `💰 *Price:* ${product.price} ETB\n` +
+                 `📦 *Category:* ${product.category}\n` +
+                 `👤 *Seller:* ${seller.firstName}\n` +
+                 `${product.description ? `📝 *Description:* ${product.description}\n` : ''}` +
+                 `\n📍 *Jimma University Campus*` +
+                 `\n\n🛒 Buy via @${bot.options.username}`,
+        parse_mode: 'Markdown',
+        reply_markup: channelKeyboard.reply_markup
+      });
+      
+    } catch (error) {
+      console.error('Channel post error:', error);
+    }
+    
+    // Notify seller
+    await bot.sendMessage(product.sellerId,
+      `✅ *Your Product Has Been Approved!*\n\n` +
+      `🏷️ *${product.title}*\n` +
+      `💰 ${product.price} ETB | ${product.category}\n\n` +
+      `🎉 Your product is now live in @jumarket!\n\n` +
+      `Buyers can now find and purchase your item.`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    await bot.answerCallbackQuery(callbackQuery.id, { 
+      text: '✅ Product approved and posted to channel!' 
+    });
+    
+  } else {
+    // Reject product
+    product.status = 'rejected';
+    product.approvedBy = adminId;
+    
+    // Notify seller
+    await bot.sendMessage(product.sellerId,
+      `❌ *Product Not Approved*\n\n` +
+      `🏷️ *${product.title}*\n\n` +
+      `Your product submission was not approved.\n\n` +
+      `Possible reasons:\n` +
+      `• Poor quality images\n` +
+      `• Inappropriate content\n` +
+      `• Missing information\n\n` +
+      `You can submit again with better details.`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    await bot.answerCallbackQuery(callbackQuery.id, { 
+      text: '❌ Product rejected' 
+    });
+  }
+}
+
+// ========== HELP & CONTACT ========== //
+bot.onText(/\/help|ℹ️ Help/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  await bot.sendMessage(chatId,
+    `ℹ️ *Jimma University Marketplace Help*\n\n` +
+    `*How to Buy:*\n` +
+    `1. Click "🛍️ Browse Products"\n` +
+    `2. View available items\n` +
+    `3. Click "🛒 Buy Now" or "📞 Contact Seller"\n` +
+    `4. Arrange campus meetup\n\n` +
+    `*How to Sell:*\n` +
+    `1. Click "➕ Sell Item"\n` +
+    `2. Send product photos\n` +
+    `3. Add title, price, description\n` +
+    `4. Wait for admin approval\n` +
+    `5. Item appears in @jumarket\n\n` +
+    `*Safety Tips:*\n` +
+    `• Meet in public campus areas\n` +
+    `• Verify items before paying\n` +
+    `• Use cash transactions\n` +
+    `• Bring friends if possible\n\n` +
+    `*Need Help?* Contact admins via "📞 Contact Admin"`,
+    { parse_mode: 'Markdown' }
   );
 });
 
-console.log('🎉 Bot fully loaded with working buttons!');
+bot.onText(/\/contact|📞 Contact Admin/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  await bot.sendMessage(chatId,
+    `📞 *Contact Administration*\n\n` +
+    `For help with:\n` +
+    `• Product approvals\n` +
+    `• Account issues\n` +
+    `• Safety concerns\n` +
+    `• Suggestions\n\n` +
+    `Please contact our admin team.\n\n` +
+    `*JU Marketplace Team* 🎓`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+// ========== BOT STATUS ========== //
+bot.onText(/\/status/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  const totalProducts = products.size;
+  const approvedProducts = Array.from(products.values()).filter(p => p.status === 'approved').length;
+  const pendingProducts = Array.from(products.values()).filter(p => p.status === 'pending').length;
+  const totalUsers = users.size;
+  
+  await bot.sendMessage(chatId,
+    `📊 *Marketplace Status*\n\n` +
+    `👥 Total Users: ${totalUsers}\n` +
+    `🛍️ Total Products: ${totalProducts}\n` +
+    `✅ Approved: ${approvedProducts}\n` +
+    `⏳ Pending: ${pendingProducts}\n\n` +
+    `🏪 *Jimma University Marketplace* 🎓`,
+    { parse_mode: 'Markdown' }
+  );
+});
+
+console.log('🎉 JU Marketplace Bot fully operational!');
