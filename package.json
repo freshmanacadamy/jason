@@ -1,7 +1,7 @@
 {
   "name": "image-gallery-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for uploading and viewing images",
+  "description": "Telegram Image Gallery Bot with Channel Posting",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
