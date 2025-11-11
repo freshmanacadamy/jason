@@ -1,79 +1,75 @@
-
 const TelegramBot = require('node-telegram-bot-api');
 const express = require('express');
-const sqlite3 = require('sqlite3').verbose();
 const app = express();
 
-const PORT = process.env.PORT || 3000;
+// Middleware
+app.use(express.json());
 
-// Express server for 24/7
+// Health check endpoint for Render
 app.get('/', (req, res) => {
-  res.send('🤖 Registration Bot with Photo Upload is Running!');
+  res.send('🤖 Bot is alive and running!');
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', timestamp: new Date().toISOString() });
+// Webhook endpoint (optional for Render)
+app.post('/webhook', (req, res) => {
+  // Handle webhook if you switch from polling
+  res.sendStatus(200);
 });
 
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Telegram Bot
+// Get token from environment variable (set in Render)
 const token = process.env.BOT_TOKEN;
+
+if (!token) {
+  console.error('❌ BOT_TOKEN environment variable is not set!');
+  process.exit(1);
+}
+
 const bot = new TelegramBot(token, { polling: true });
 
-// Database setup
-const db = new sqlite3.Database('users.db');
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER,
-    username TEXT,
-    full_name TEXT,
-    email TEXT,
-    phone TEXT,
-    photo_id TEXT,
-    status TEXT DEFAULT 'pending',
-    registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`);
+console.log('✅ Bot started successfully!');
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS admins (
-    chat_id INTEGER PRIMARY KEY,
-    username TEXT
-  )
-`);
-
-// Admin chat ID - replace with your actual Telegram chat ID
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID || '123456789'; // Your personal Telegram chat ID
-
-// Store user registration state
-const userStates = {};
-
-// Start command with registration buttons
+// Handle /start command with main menu
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from.username || 'No username';
-  
-  const welcomeMessage = `👋 Welcome ${msg.from.first_name}!\n\nI can help you with registration. Please choose an option:`;
-  
   const options = {
+    reply_markup: {
+      keyboard: [
+        [{ text: '📊 Get Info' }, { text: '🛠️ Services' }],
+        [{ text: '🔗 Links' }, { text: 'ℹ️ About' }],
+        [{ text: '🎲 Random Number' }]
+      ],
+      resize_keyboard: true,
+      one_time_keyboard: false
+    }
+  };
+  
+  bot.sendMessage(chatId, 'Welcome! Choose an option:', options);
+});
+
+// Handle inline buttons for specific actions
+bot.onText(/\/menu/, (msg) => {
+  const chatId = msg.chat.id;
+  const inlineKeyboard = {
     reply_markup: {
       inline_keyboard: [
         [
-          { text: '📝 Start Registration', callback_data: 'start_registration' },
-          { text: 'ℹ️ About Us', callback_data: 'about' }
+          { text: '⭐ Star Repository', url: 'https://github.com' },
+          { text: '📞 Contact', callback_data: 'contact' }
         ],
         [
-          { text: '📞 Contact Admin', callback_data: 'contact_admin' }
+          { text: '🔄 Refresh', callback_data: 'refresh' },
+          { text: '❌ Close', callback_data: 'close' }
         ]
       ]
     }
   };
   
-  bot.sendMessage(chatId, welcomeMessage, options);
+  bot.sendMessage(chatId, '🔧 Quick Actions Menu:', inlineKeyboard);
 });
 
 // Handle button callbacks
@@ -83,264 +79,118 @@ bot.on('callback_query', async (callbackQuery) => {
   const data = callbackQuery.data;
 
   try {
-    if (data === 'start_registration') {
-      await startRegistration(chatId, callbackQuery.from);
-    } else if (data === 'about') {
-      await bot.sendMessage(chatId, '🤖 We provide amazing services! Contact us for more information.');
-    } else if (data === 'contact_admin') {
-      await bot.sendMessage(chatId, '📞 Please contact our admin directly or use the registration form.');
-    } else if (data === 'submit_registration') {
-      await submitRegistration(chatId);
-    } else if (data === 'cancel_registration') {
-      await cancelRegistration(chatId);
+    switch (data) {
+      case 'contact':
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '📧 Contact: example@email.com' });
+        break;
+        
+      case 'refresh':
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '🔄 Refreshing...' });
+        await bot.editMessageText('✅ Menu refreshed!', {
+          chat_id: chatId,
+          message_id: message.message_id
+        });
+        break;
+        
+      case 'close':
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '❌ Menu closed' });
+        await bot.deleteMessage(chatId, message.message_id);
+        break;
+        
+      default:
+        await bot.answerCallbackQuery(callbackQuery.id, { text: '⚙️ Action processed' });
     }
-    
-    // Answer callback query to remove loading state
-    bot.answerCallbackQuery(callbackQuery.id);
   } catch (error) {
-    console.error('Callback error:', error);
-    bot.answerCallbackQuery(callbackQuery.id, { text: 'Error occurred!' });
+    console.error('Error handling callback:', error);
   }
 });
 
-// Start registration process
-async function startRegistration(chatId, user) {
-  userStates[chatId] = {
-    step: 'waiting_full_name',
-    data: {
-      username: user.username,
-      full_name: '',
-      email: '',
-      phone: '',
-      photo_id: ''
-    }
-  };
-  
-  const registrationMessage = `📝 Registration Started!\n\nPlease follow these steps:\n\n1. Send your full name\n2. Send your email\n3. Send your phone number\n4. Upload a profile photo\n\nYou can cancel anytime using /cancel`;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '❌ Cancel Registration', callback_data: 'cancel_registration' }]
-      ]
-    }
-  };
-  
-  await bot.sendMessage(chatId, registrationMessage, options);
-  await bot.sendMessage(chatId, 'Step 1: Please send your full name:');
-}
-
-// Handle messages during registration
+// Handle regular keyboard buttons
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
-  
-  // Skip if it's a command or user not in registration
-  if (!userStates[chatId] || msg.text?.startsWith('/')) return;
-  
-  const state = userStates[chatId];
-  
-  try {
-    if (state.step === 'waiting_full_name') {
-      state.data.full_name = text;
-      state.step = 'waiting_email';
-      await bot.sendMessage(chatId, 'Step 2: Please send your email:');
+
+  // Ignore commands that are already handled
+  if (text.startsWith('/')) return;
+
+  switch (text) {
+    case '📊 Get Info':
+      const userInfo = `
+👤 User Info:
+ID: ${msg.from.id}
+First Name: ${msg.from.first_name}
+Username: @${msg.from.username || 'N/A'}
+      `.trim();
       
-    } else if (state.step === 'waiting_email') {
-      // Simple email validation
-      if (!text.includes('@')) {
-        await bot.sendMessage(chatId, '❌ Please enter a valid email address:');
-        return;
-      }
-      state.data.email = text;
-      state.step = 'waiting_phone';
-      await bot.sendMessage(chatId, 'Step 3: Please send your phone number:');
+      await bot.sendMessage(chatId, userInfo);
+      break;
       
-    } else if (state.step === 'waiting_phone') {
-      state.data.phone = text;
-      state.step = 'waiting_photo';
-      await bot.sendMessage(chatId, 'Step 4: Please upload your profile photo:');
-    }
-  } catch (error) {
-    console.error('Message handling error:', error);
-    await bot.sendMessage(chatId, '❌ An error occurred. Please try again.');
-  }
-});
-
-// Handle photo uploads
-bot.on('photo', async (msg) => {
-  const chatId = msg.chat.id;
-  
-  if (!userStates[chatId] || userStates[chatId].step !== 'waiting_photo') return;
-  
-  try {
-    // Get the largest photo version
-    const photo = msg.photo[msg.photo.length - 1];
-    const fileId = photo.file_id;
-    
-    userStates[chatId].data.photo_id = fileId;
-    userStates[chatId].step = 'completed';
-    
-    // Show registration summary
-    const userData = userStates[chatId].data;
-    const summary = `
-✅ Registration Complete!
-
-📋 Your Details:
-👤 Name: ${userData.full_name}
-📧 Email: ${userData.email}
-📞 Phone: ${userData.phone}
-🖼️ Photo: Uploaded
-
-Please review and submit your registration.
-    `;
-    
-    const options = {
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '✅ Submit Registration', callback_data: 'submit_registration' },
-            { text: '❌ Cancel', callback_data: 'cancel_registration' }
-          ]
-        ]
-      }
-    };
-    
-    // Send the uploaded photo back to user
-    await bot.sendPhoto(chatId, fileId, { caption: '📸 Your uploaded photo' });
-    await bot.sendMessage(chatId, summary, options);
-    
-  } catch (error) {
-    console.error('Photo handling error:', error);
-    await bot.sendMessage(chatId, '❌ Error processing photo. Please try again.');
-  }
-});
-
-// Submit registration to admin
-async function submitRegistration(chatId) {
-  try {
-    const userData = userStates[chatId].data;
-    
-    // Save to database
-    db.run(
-      `INSERT INTO users (chat_id, username, full_name, email, phone, photo_id, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [chatId, userData.username, userData.full_name, userData.email, userData.phone, userData.photo_id, 'pending'],
-      function(err) {
-        if (err) {
-          console.error('Database error:', err);
-          bot.sendMessage(chatId, '❌ Database error. Please try again.');
-          return;
-        }
-        
-        // Send notification to admin
-        const adminMessage = `
-🆕 NEW REGISTRATION!
-
-👤 User: ${userData.full_name}
-📧 Email: ${userData.email}
-📞 Phone: ${userData.phone}
-🤖 Username: @${userData.username}
-🆔 User ID: ${chatId}
-📅 Registered: ${new Date().toLocaleString()}
-        `;
-        
-        // Send text info to admin
-        bot.sendMessage(ADMIN_CHAT_ID, adminMessage);
-        
-        // Send photo to admin if available
-        if (userData.photo_id) {
-          bot.sendPhoto(ADMIN_CHAT_ID, userData.photo_id, { 
-            caption: `📸 Profile photo from ${userData.full_name}` 
-          });
-        }
-        
-        // Admin actions keyboard
-        const adminOptions = {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '✅ Approve User', callback_data: `approve_${chatId}` },
-                { text: '❌ Reject User', callback_data: `reject_${chatId}` }
-              ],
-              [
-                { text: '📞 Contact User', callback_data: `contact_${chatId}` }
-              ]
+    case '🛠️ Services':
+      const servicesKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🌐 Web Development', callback_data: 'web_dev' },
+              { text: '📱 App Development', callback_data: 'app_dev' }
+            ],
+            [
+              { text: '☁️ Cloud Services', callback_data: 'cloud' },
+              { text: '🔒 Security', callback_data: 'security' }
             ]
-          }
-        };
+          ]
+        }
+      };
+      await bot.sendMessage(chatId, 'Our Services:', servicesKeyboard);
+      break;
+      
+    case '🔗 Links':
+      const linksKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '🌐 Website', url: 'https://example.com' },
+              { text: '📚 Documentation', url: 'https://docs.example.com' }
+            ],
+            [
+              { text: '💬 Support', url: 'https://t.me/yourchannel' },
+              { text: '🐙 GitHub', url: 'https://github.com' }
+            ]
+          ]
+        }
+      };
+      await bot.sendMessage(chatId, 'Useful Links:', linksKeyboard);
+      break;
+      
+    case 'ℹ️ About':
+      await bot.sendMessage(chatId, 
+        `🤖 About This Bot:
+Version: 1.0
+Framework: Node.js
+Host: Render
+Features: Buttons, Inline Keyboard, Web Server
         
-        bot.sendMessage(ADMIN_CHAT_ID, 'Choose action:', adminOptions);
-        
-        // Confirm to user
-        bot.sendMessage(chatId, '✅ Your registration has been submitted! Admin will review it soon.');
-        
-        // Clear user state
-        delete userStates[chatId];
+This is a demo bot showcasing Telegram Bot API capabilities.`
+      );
+      break;
+      
+    case '🎲 Random Number':
+      const randomNum = Math.floor(Math.random() * 100) + 1;
+      await bot.sendMessage(chatId, `🎲 Your random number: ${randomNum}`);
+      break;
+      
+    default:
+      // Echo other messages
+      if (msg.text && !msg.text.startsWith('/')) {
+        await bot.sendMessage(chatId, `You said: "${msg.text}"\n\nUse /start for main menu or /menu for inline buttons.`);
       }
-    );
-  } catch (error) {
-    console.error('Submission error:', error);
-    bot.sendMessage(chatId, '❌ Error submitting registration. Please try again.');
   }
-}
-
-// Cancel registration
-async function cancelRegistration(chatId) {
-  delete userStates[chatId];
-  await bot.sendMessage(chatId, '❌ Registration cancelled. Use /start to begin again.');
-}
-
-// Admin commands
-bot.onText(/\/admin/, (msg) => {
-  const chatId = msg.chat.id;
-  
-  // Check if user is admin
-  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
-    bot.sendMessage(chatId, '❌ Access denied. Admin only.');
-    return;
-  }
-  
-  const adminMessage = `👑 Admin Panel\n\nChoose an action:`;
-  
-  const options = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📊 View Statistics', callback_data: 'admin_stats' }],
-        [{ text: '👥 Pending Registrations', callback_data: 'admin_pending' }],
-        [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }]
-      ]
-    }
-  };
-  
-  bot.sendMessage(chatId, adminMessage, options);
 });
 
-// Handle admin callbacks
-bot.on('callback_query', async (callbackQuery) => {
-  const message = callbackQuery.message;
-  const chatId = message.chat.id;
-  const data = callbackQuery.data;
-  
-  // Check if admin
-  if (chatId.toString() !== ADMIN_CHAT_ID.toString()) {
-    bot.answerCallbackQuery(callbackQuery.id, { text: 'Admin only!' });
-    return;
-  }
-  
-  if (data.startsWith('approve_')) {
-    const userChatId = data.replace('approve_', '');
-    // Approve user logic here
-    bot.sendMessage(chatId, `✅ User ${userChatId} approved!`);
-    bot.sendMessage(userChatId, '🎉 Your registration has been approved!');
-  } else if (data.startsWith('reject_')) {
-    const userChatId = data.replace('reject_', '');
-    // Reject user logic here
-    bot.sendMessage(chatId, `❌ User ${userChatId} rejected!`);
-    bot.sendMessage(userChatId, '❌ Your registration has been rejected. Contact admin for details.');
-  }
-  
-  bot.answerCallbackQuery(callbackQuery.id);
+// Error handling
+bot.on('error', (error) => {
+  console.error('❌ Bot error:', error);
 });
 
-console.log('✅ Telegram Registration Bot Started!');
+bot.on('polling_error', (error) => {
+  console.error('❌ Polling error:', error);
+});
