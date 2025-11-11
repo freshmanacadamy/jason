@@ -1,14 +1,17 @@
-{
-  "name": "telegram-registration-bot",
-  "version": "1.0.0",
-  "description": "Telegram bot for lecture class registration",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "node-telegram-bot-api": "^0.64.0",
-    "express": "^4.18.2",
-    "sqlite3": "^5.1.6"
-  }
+// Telegram Bot - Use Webhooks instead of polling
+const token = process.env.BOT_TOKEN;
+const bot = new TelegramBot(token);
+
+// Use webhooks for Render
+if (process.env.NODE_ENV === 'production') {
+  const webhookUrl = `https://${process.env.RENDER_EXTERNAL_URL || 'jason-dzza.onrender.com'}/webhook`;
+  bot.setWebHook(webhookUrl);
+  
+  app.post('/webhook', (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+  });
+} else {
+  // Use polling only in development
+  bot.startPolling();
 }
