@@ -1179,11 +1179,16 @@ async function handleAdminApproval(productId, callbackQuery, approve) {
 }
 
 // ========== HELP & CONTACT ========== //
+
+// ========== HELP COMMAND ========== //
 bot.onText(/\/help|ℹ️ Help/, async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
   
-  await bot.sendMessage(chatId,
-    `ℹ️ *Jimma University Marketplace Help*\n\n` +
+  // Check if user is admin to show admin commands
+  const isAdmin = ADMIN_IDS.includes(userId);
+  
+  let helpMessage = `ℹ️ *Jimma University Marketplace Help*\n\n` +
     `*How to Buy:*\n` +
     `1. Click "🛍️ Browse Products"\n` +
     `2. View available items\n` +
@@ -1200,11 +1205,38 @@ bot.onText(/\/help|ℹ️ Help/, async (msg) => {
     `• Verify items before paying\n` +
     `• Use cash transactions\n` +
     `• Bring friends if possible\n\n` +
-    `*Need Help?* Contact admins via "📞 Contact Admin"`,
-    { parse_mode: 'Markdown' }
-  );
+    `*User Commands:*\n` +
+    `/start - Start the bot\n` +
+    `/help - Show this help message\n` +
+    `/browse - Browse products\n` +
+    `/sell - Sell an item\n` +
+    `/myproducts - View your products\n` +
+    `/contact - Contact admin\n`;
+  
+  // Add admin commands only for admins
+  if (isAdmin) {
+    helpMessage += `\n` +
+      `*⚡ Admin Commands:*\n` +
+      `/admin - Open admin panel\n` +
+      `/pending - View pending approvals\n` +
+      `/messageuser - Message specific user\n` +
+      `/broadcast - Message all users\n` +
+      `/stats - View marketplace statistics\n` +
+      `/users - View all registered users\n` +
+      `/allproducts - View all products\n` +
+      `/testapproval - Test notification system\n\n` +
+      `*Admin Features:*\n` +
+      `• Instant product approval notifications\n` +
+      `• Approve/Reject with one click\n` +
+      `• Message sellers directly\n` +
+      `• Broadcast to all users\n` +
+      `• View detailed statistics\n`;
+  }
+  
+  helpMessage += `\n*Need Help?* Contact admins via "📞 Contact Admin"`;
+  
+  await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
 });
-
 bot.onText(/\/contact|📞 Contact Admin/, async (msg) => {
   const chatId = msg.chat.id;
   
